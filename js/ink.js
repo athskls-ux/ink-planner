@@ -12,8 +12,11 @@ const settings = {
 export { settings as inkSettings };
 
 export class InkSurface {
-  constructor(host, { height, background, strokes = [], onChange }) {
-    this.host = host; this.height = height; this.onChange = onChange;
+  // margin/onMarginTap: a tap left of `margin` (page units) is handed to the app instead of drawing (to change an hour).
+  constructor(host, { height, background, strokes = [], onChange, margin = 0, onMarginTap }) {
+    this.host = host; this.height = height; this.onChange = onChange; this.margin = margin; this.onMarginTap = onMarginTap;
+    // Pen style for new strokes: colour ("" = theme ink) and width factor. Tools: pen, draw (not recognised), marker, eraser.
+    this.color = ""; this.widthFactor = 1;
     this.strokes = strokes; this.nextId = Math.max(0, ...strokes.map(s => s.id)) + 1;
     this.undoStack = []; this.redoStack = [];
     this.tool = "pen"; this.cur = null; this.sawPen = false; this.pressures = [];
@@ -50,31 +53,44 @@ export class InkSurface {
   width(p) { return 1.1 + 2.6 * Math.min(1, (p || 0.5) / settings.pressureMax); }
   ink() { return getComputedStyle(this.host).getPropertyValue("--ink").trim() || "#111"; }
   drawStroke(s, from = 1) {
-    const c = this.ctx, pts = s.pts; c.lineCap = "round"; c.lineJoin = "round"; c.strokeStyle = this.inkColor;
-    if (pts.length === 1) { c.beginPath(); c.arc(pts[0][0], pts[0][1], this.width(pts[0][3]) / 2, 0, 7); c.fillStyle = this.inkColor; c.fill(); return; }
+    const c = this.ctx, pts = s.pts, k = s.w || 1, color = s.color || (s.hl ? "#ffd54a" : this.inkColor);
+    c.lineCap = "round"; c.lineJoin = "round"; c.strokeStyle = c.fillStyle = color;
+    // Marker: one wide translucent path (drawn segment by segment while writing, then cleanly on redraw).
+    if (s.hl) {
+      c.globalAlpha = 0.38; c.lineWidth = 16 * k; c.beginPath();
+      const start = from > 1 ? from - 1 : 0;
+      c.moveTo(pts[start][0], pts[start][1]); for (let i = start + 1; i < pts.length; i++) c.lineTo(pts[i][0], pts[i][1]);
+      if (pts.length === 1) c.lineTo(pts[0][0] + 0.1, pts[0][1]);
+      c.stroke(); c.globalAlpha = 1; return;
+    }
+    if (pts.length === 1) { c.beginPath(); c.arc(pts[0][0], pts[0][1], this.width(pts[0][3]) * k / 2, 0, 7); c.fill(); return; }
     for (let i = Math.max(1, from); i < pts.length; i++) {
       const a = pts[i - 1], b = pts[i];
-      c.lineWidth = this.width((a[3] + b[3]) / 2);
+      c.lineWidth = this.width((a[3] + b[3]) / 2) * k;
       c.beginPath(); c.moveTo(a[0], a[1]); c.lineTo(b[0], b[1]); c.stroke();
     }
   }
   redraw() {
     this.inkColor = this.ink();
     this.ctx.save(); this.ctx.setTransform(1, 0, 0, 1, 0, 0); this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height); this.ctx.restore();
-    for (const s of this.strokes) if (!this.hidden.has(s.id)) this.drawStroke(s);
+    // Marker strokes go underneath the writing.
+    for (const s of this.strokes) if (s.hl && !this.hidden.has(s.id)) this.drawStroke(s);
+    for (const s of this.strokes) if (!s.hl && !this.hidden.has(s.id)) this.drawStroke(s);
     this.drawLabels();
   }
 
-  // labels: [{ text, x, baseline, limit, join, size, muted, strike }] in page units, in reading order.
-  // `join` places a word right after the previous label with a normal space; `limit` is the right edge it must not pass.
+  // labels: [{ text, x, baseline, limit, join, size, tone, strike }] in page units, in reading order.
+  // `join` places a word right after the previous label with a normal space; `limit` is the right edge it must not pass;
+  // `tone` is "accent" or "muted" for symbols and hour labels.
   setConverted(hiddenIds, labels) { this.hidden = new Set(hiddenIds); this.labels = labels; this.redraw(); }
   drawLabels() {
-    const c = this.ctx, style = getComputedStyle(this.host), font = style.fontFamily, muted = style.getPropertyValue("--accent").trim();
+    const c = this.ctx, style = getComputedStyle(this.host), font = style.fontFamily;
+    const tones = { accent: style.getPropertyValue("--accent").trim(), muted: style.getPropertyValue("--muted").trim() };
     c.textBaseline = "alphabetic";
     let end = 0;
     for (const l of this.labels) {
       let size = l.size || 30;
-      c.font = `${size}px ${font}`; c.fillStyle = l.muted ? muted : this.inkColor;
+      c.font = `${size}px ${font}`; c.fillStyle = tones[l.tone] || this.inkColor;
       const x = l.join ? end + c.measureText(" ").width : l.x, w = c.measureText(l.text).width;
       if (w > l.limit - x) { size = Math.max(14, size * (l.limit - x) / w); c.font = `${size}px ${font}`; }
       c.fillText(l.text, x, l.baseline);
@@ -94,11 +110,15 @@ export class InkSurface {
 
   pointerdown(e) {
     if (e.pointerType === "pen") this.sawPen = true;
-    this.canvas.setPointerCapture(e.pointerId);
+    try { this.canvas.setPointerCapture(e.pointerId); } catch { /* pointer already gone */ }
     if (this.fingerScrolls(e)) { this.scrollY = e.clientY; this.cur = { scroll: true }; return; }
     if (e.button === 2) return;
     const erase = this.tool === "eraser" || (e.buttons & 32) === 32;
-    this.cur = erase ? { erase: true, removed: [] } : { id: this.nextId++, pts: [this.pt(e)] };
+    // stopPropagation: the app closes open popovers on any pointerdown, which would close the one this tap opens.
+    if (!erase && this.onMarginTap && this.pt(e)[0] < this.margin) { e.stopPropagation(); this.onMarginTap(this.pt(e), e); return; }
+    const style = { ...(this.color && { color: this.color }), ...(this.widthFactor !== 1 && { w: this.widthFactor }),
+                    ...(this.tool === "draw" && { draw: true }), ...(this.tool === "marker" && { hl: true }) };
+    this.cur = erase ? { erase: true, removed: [] } : { id: this.nextId++, pts: [this.pt(e)], ...style };
     if (erase) this.eraseAt(this.pt(e));
   }
   pointermove(e) {
@@ -119,6 +139,7 @@ export class InkSurface {
     if (!c || c.scroll) return;
     if (c.erase) { if (c.removed.length) this.commit({ removed: c.removed }); return; }
     this.strokes.push(c);
+    if (c.hl) this.redraw();
     this.commit({ added: [c] });
     this.calibrate();
   }

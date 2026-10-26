@@ -21,6 +21,13 @@ recognition. It runs in the browser as an installable web app (PWA), with no acc
   Postponing moves the item to another day and time and notes where it came from.
 - **Reminders** 10 minutes to 1 day before. They fire while the browser is running (also in the background); reliable
   reminders when the browser is closed will come with Google Calendar sync.
+- **Repeating items:** daily, weekdays, weekly, monthly or yearly; birthdays (🎂) repeat yearly and last all day.
+  The Google Calendar link carries the repeat rule.
+- **Hour labels** in the margin show the line's time; tap one with the pen to change it.
+- **Pens:** colours, thickness, a highlighter, and a drawing pen whose strokes are never sent for recognition.
+- **Collections:** habit, mood, stress, energy, sleep and water trackers, year in pixels, gratitude, workout, goals,
+  future log, brain dump, reading list, movies, expenses and an ideas page. Pick the ones you want in Settings.
+- **Notes paper:** lined, dotted, grid or blank.
 - **Light, dark or automatic** appearance.
 - **Search** across everything you have written.
 - **Works offline:** pages are stored on the device (IndexedDB) and recognised when you are back online. Backup and

@@ -6,6 +6,9 @@ import { recognise, pageText } from "./recognize.js";
 import { loadLexicon, learn, strip } from "./lexicon.js";
 import { iso, parseIso, addDays, addMonths, monday, weekKey, weekStart, isoWeek, sameDay } from "./dates.js";
 import { askNotifications, scheduleReminders } from "./remind.js";
+import { occurrences, addRecurring, updateRecurring, REPEATS } from "./recurring.js";
+import { COLLECTIONS, DEFAULT_COLLECTIONS, periodNow, shiftPeriod } from "./collections.js";
+import { PAPERS } from "./templates.js";
 
 // ---------- language ----------
 const LANG = (navigator.language || "en").startsWith("el") ? "el" : "en";
@@ -19,7 +22,12 @@ const STR = {
         noAgenda: "Γράψε δίπλα σε μια ώρα, ή γράψε μια ώρα μπροστά (π.χ. 10:30), για ραντεβού ή δουλειά.", done: "Έγινε", time: "Ώρα",
         status: "Κατάσταση", task: "Δουλειά", event: "Ραντεβού", star: "Σημαντικό", cancelItem: "Ακύρωση", reopen: "Ξανά ανοιχτό",
         remind: "Υπενθύμιση", migrate: "Μετάθεση", move: "Μετάθεση", notifOff: "Οι ειδοποιήσεις είναι κλειστές για αυτή τη σελίδα στον browser.",
-        newItem: "Νέο ραντεβού ή δουλειά…", add: "Προσθήκη", theme: "Εμφάνιση", auto: "Αυτόματο", light: "Φωτεινό", dark: "Σκούρο" },
+        newItem: "Νέο ραντεβού ή δουλειά…", add: "Προσθήκη", theme: "Εμφάνιση", auto: "Αυτόματο", light: "Φωτεινό", dark: "Σκούρο",
+        allDay: "Όλη μέρα", birthday: "Γενέθλια", repeat: "Επανάληψη", noRepeat: "Χωρίς", rep_daily: "Κάθε μέρα", rep_weekdays: "Καθημερινές",
+        rep_weekly: "Κάθε εβδομάδα", rep_monthly: "Κάθε μήνα", rep_yearly: "Κάθε χρόνο", thickness: "Πάχος", drawTool: "Σχέδιο (χωρίς αναγνώριση)",
+        marker: "Μαρκαδόρος", penStyle: "Χρώμα και πάχος", col: "Συλλογές", collections: "Συλλογές", moreCols: "Περισσότερες",
+        moreColsHint: "Διάλεξε trackers και λίστες στις Ρυθμίσεις.", paper: "Χαρτί σημειώσεων", paper_lined: "Γραμμές", paper_dotted: "Τελείες",
+        paper_grid: "Τετράγωνα", paper_blank: "Λευκό", writing: "Γραφή" },
   en: { today: "Today", month: "Month", week: "Week", day: "Day", notes: "Notes", search: "Search", pen: "Pen", eraser: "Eraser",
         undo: "Undo", redo: "Redo", penOnly: "Pen only", text: "Text", recognising: "Recognising…", offline: "Offline: recognition will run later",
         empty: "Write with the pen; the text appears here.", fix: "Correct", save: "Save", cancel: "Cancel", searchHint: "Search your handwriting…",
@@ -29,7 +37,12 @@ const STR = {
         noAgenda: "Write next to an hour, or start a line with a time (e.g. 10:30), to add an appointment or task.", done: "Done", time: "Time",
         status: "Status", task: "Task", event: "Appointment", star: "Important", cancelItem: "Cancel", reopen: "Reopen",
         remind: "Reminder", migrate: "Postpone", move: "Move", notifOff: "Notifications are blocked for this page in the browser.",
-        newItem: "New appointment or task…", add: "Add", theme: "Appearance", auto: "Automatic", light: "Light", dark: "Dark" },
+        newItem: "New appointment or task…", add: "Add", theme: "Appearance", auto: "Automatic", light: "Light", dark: "Dark",
+        allDay: "All day", birthday: "Birthday", repeat: "Repeat", noRepeat: "None", rep_daily: "Daily", rep_weekdays: "Weekdays",
+        rep_weekly: "Weekly", rep_monthly: "Monthly", rep_yearly: "Yearly", thickness: "Thickness", drawTool: "Drawing (not recognised)",
+        marker: "Highlighter", penStyle: "Colour and thickness", col: "Collections", collections: "Collections", moreCols: "More",
+        moreColsHint: "Choose trackers and lists in Settings.", paper: "Notes paper", paper_lined: "Lined", paper_dotted: "Dotted",
+        paper_grid: "Grid", paper_blank: "Blank", writing: "Writing" },
 }[LANG];
 
 const $ = (s, el = document) => el.querySelector(s);
@@ -45,7 +58,8 @@ function route() {
   closeSurface(); syncTools();
   if (view === "month") return showMonth(arg ? parseIso(arg + "-01") : today);
   if (view === "week") return showWeek(arg || weekKey(today));
-  if (view === "notes") return showInk("notes:inbox", notesTemplate(), STR.notes);
+  if (view === "notes") return showInk("notes:inbox", notesTemplate(localStorage.getItem("paper") || "lined"), STR.notes);
+  if (view === "col") return arg ? showCollection(arg, location.hash.split("/")[3]) : showCollections();
   if (view === "search") return showSearch(decodeURIComponent(arg || ""));
   return showDay(arg ? parseIso(arg) : today);
 }
@@ -68,21 +82,47 @@ async function showMonth(d) {
   const start = monday(first), today = new Date();
   const daysInMonth = new Date(first.getFullYear(), first.getMonth() + 1, 0).getDate();
   const nWeeks = Math.ceil(((first - start) / 864e5 + daysInMonth) / 7);
-  let cells = "";
+  const open = e => !e.done && !["done", "cancelled", "migrated"].includes(e.status);
+  // A narrow first column holds the week numbers, which open the week page.
+  let cells = `<div class="dow"></div>`;
   for (let i = 0; i < 7; i++) cells += `<div class="dow">${addDays(start, i).toLocaleDateString(LANG, { weekday: "short" })}</div>`;
   for (let i = 0; i < nWeeks * 7; i++) {
     const day = addDays(start, i);
-    // Appointments first (with their time), then the day's other notes.
-    const p = pages.get("day:" + iso(day));
-    const open = e => !e.done && !["done", "cancelled", "migrated"].includes(e.status);
-    const snippet = (p?.events?.length ? p.events.filter(open).map(e => `${eventTime(e)} ${e.text}`) : (p?.text || "").split("\n").filter(Boolean)).slice(0, 3);
-    const ink = p?.strokes?.length && !snippet.length;
+    if (i % 7 === 0) cells += `<a class="wk" href="#/week/${weekKey(day)}" title="${STR.week_n} ${isoWeek(day).week}">${isoWeek(day).week}</a>`;
+    // Repeating items (birthdays first), then appointments with their time, then the day's other notes.
+    const p = pages.get("day:" + iso(day)), reps = await occurrences(iso(day));
+    const timed = (p?.events || []).filter(e => open(e) && e.rid == null).map(e => `${eventTime(e)} ${e.text}`);
+    const lines = [...reps.filter(open).map(r => `${r.kind === "birthday" ? "🎂" : "↻"} ${r.time ? r.time + " " : ""}${r.text}`),
+                   ...(timed.length ? timed : (p?.text || "").split("\n").filter(Boolean))].slice(0, 3);
+    const ink = p?.strokes?.length && !lines.length;
     cells += `<a class="cell${day.getMonth() !== first.getMonth() ? " out" : ""}${sameDay(day, today) ? " today" : ""}" href="#/day/${iso(day)}">
-      <span class="num">${day.getDate()}</span>${snippet.map(s => `<span class="snip">${esc(s)}</span>`).join("")}${ink ? `<span class="dot"></span>` : ""}</a>`;
+      <span class="num">${day.getDate()}</span>${lines.map(s => `<span class="snip">${esc(s)}</span>`).join("")}${ink ? `<span class="dot"></span>` : ""}</a>`;
   }
-  const weeks = Array.from({ length: nWeeks }, (_, i) => addDays(start, i * 7));
-  main.innerHTML = `<div class="month" style="--weeks:${nWeeks}">${cells}</div>
-    <div class="weeklinks">${weeks.map(w => `<a href="#/week/${weekKey(w)}">${STR.week_n} ${isoWeek(w).week}</a>`).join("")}</div>`;
+  main.innerHTML = `<div class="month" style="--weeks:${nWeeks}">${cells}</div>`;
+}
+
+// ---------- collections (trackers and logs) ----------
+const enabledCollections = () => { try { return JSON.parse(localStorage.getItem("collections")) || DEFAULT_COLLECTIONS; } catch { return DEFAULT_COLLECTIONS; } };
+const colName = id => COLLECTIONS[id][LANG][0];
+function periodLabel(c, p) {
+  if (c.period === "month") { const [y, m] = p.split("-").map(Number); return new Date(y, m - 1, 1).toLocaleDateString(LANG, { month: "long", year: "numeric" }); }
+  return c.period === "year" ? p : "";
+}
+function showCollections() {
+  header(STR.collections, null, null, "col");
+  main.innerHTML = `<div class="cols">${enabledCollections().filter(id => COLLECTIONS[id]).map(id => {
+    const c = COLLECTIONS[id];
+    return `<a class="colcard" href="#/col/${id}/${periodNow(c)}"><span class="icon">${c.icon}</span><b>${esc(c[LANG][0])}</b><span>${esc(c[LANG][1])}</span></a>`;
+  }).join("")}<a class="colcard more" href="#" id="moreCols"><span class="icon">＋</span><b>${STR.moreCols}</b><span>${STR.moreColsHint}</span></a></div>`;
+  $("#moreCols").onclick = e => { e.preventDefault(); $("#settingsBtn").click(); };
+}
+function showCollection(id, period) {
+  const c = COLLECTIONS[id]; if (!c) return showCollections();
+  period ||= periodNow(c);
+  const nav = p => `#/col/${id}/${shiftPeriod(c, period, p)}`;
+  header(`${c.icon} ${esc(colName(id))} <small>${periodLabel(c, period)}</small>`, c.period === "none" ? null : nav(-1), nav(1), "col",
+         `<a href="#/col">← ${STR.collections}</a>`);
+  return showInk(`col:${id}:${period}`, c.build(period, LANG, colName(id)));
 }
 
 // ---------- week & day ----------
@@ -101,7 +141,7 @@ function showDay(d) {
   return showInk("day:" + iso(d), dayTemplate());
 }
 
-let surface = null, saveTimer = null, recogTimer = null, page = null, tplNow = null;
+let surface = null, saveTimer = null, recogTimer = null, page = null, tplNow = null, dayReps = [];
 function closeSurface() { surface?.destroy(); surface = null; clearTimeout(saveTimer); clearTimeout(recogTimer); }
 
 // `title` is only given for pages without dates (notes), which have no prev/next.
@@ -109,19 +149,24 @@ async function showInk(key, tpl, title) {
   if (title) header(title, null, null, "notes");
   page = (await getPage(key)) || { key, strokes: [], words: [], text: "" };
   tplNow = tpl;
-  main.innerHTML = `<div class="inkview">
+  dayReps = tpl.slots ? await occurrences(key.slice(4)) : [];
+  if (tpl.slots) page.events = extractEvents();
+  // Trackers are not recognised, so they get the whole width and no text panel.
+  main.innerHTML = `<div class="inkview${tpl.recognize === false ? " solo" : ""}">
       <div class="scroller"><div class="sheet"><div id="ink"></div></div></div>
-      <aside class="transcript">${tpl.slots ? `<h3>${STR.agenda}</h3><div id="agenda"></div>` : ""}
-        <h3>${STR.text} <span id="rstatus"></span></h3><div id="words"></div><p class="hint">${STR.tapFix}</p></aside>
+      ${tpl.recognize === false ? "" : `<aside class="transcript">${tpl.slots ? `<h3>${STR.agenda}</h3><div id="agenda"></div>` : ""}
+        <h3>${STR.text} <span id="rstatus"></span></h3><div id="words"></div><p class="hint">${STR.tapFix}</p></aside>`}
     </div>`;
   surface = new InkSurface($("#ink"), {
     height: tpl.height, background: tpl.background, strokes: page.strokes,
-    onChange: strokes => { page.strokes = strokes; scheduleSave(); scheduleRecognition(tpl); },
+    onChange: strokes => { page.strokes = strokes; scheduleSave(); if (tpl.recognize !== false) scheduleRecognition(tpl); },
+    ...(tpl.margin && { margin: tpl.margin, onMarginTap: marginTap }),
   });
+  applyPen();
   syncTools();
   renderWords();
   // Pages written while offline (or before recognition was on) get recognised on open.
-  if (page.strokes.length && (!page.words?.length || page.words.some(w => w.error))) scheduleRecognition(tpl, 300);
+  if (tpl.recognize !== false && page.strokes.length && (!page.words?.length || page.words.some(w => w.error))) scheduleRecognition(tpl, 300);
 }
 
 function scheduleSave() { clearTimeout(saveTimer); saveTimer = setTimeout(() => putPage(page), 500); }
@@ -135,7 +180,8 @@ function scheduleRecognition(tpl, delay = 1600) {
     status && (status.textContent = STR.recognising);
     const current = page;
     await loadLexicon();
-    const words = await recognise(current.strokes, lineFinder(tpl.baselines), current.words);
+    // Drawings and marker strokes are not handwriting.
+    const words = await recognise(current.strokes.filter(s => !s.draw && !s.hl), lineFinder(tpl.baselines), current.words);
     if (current !== page) return;
     page.words = words; page.text = pageText(words); page.events = extractEvents();
     await putPage(page);
@@ -171,10 +217,39 @@ function showConverted() {
     const line = e.line ??(tplNow.slots ? tplNow.slots.indexOf(+eventTime(e).slice(0, 2)) : -1);
     if (line < 0 || (e.line == null && used.has(line))) continue;
     used.add(line);
-    labels.push({ text: (e.star ? "★" : "") + symbol(e), x: 56, baseline: baseline(line), limit: 78, size: 22, muted: true });
+    labels.push({ text: (e.star ? "★" : "") + symbol(e), x: 56, baseline: baseline(line), limit: 78, size: 22, tone: "accent" });
     if (e.line == null) labels.push({ text: e.text, x: tplNow.textX, baseline: baseline(line), limit: 992, strike: e.status === "cancelled" });
   }
+  // Hour labels in the margin show the line's time, including one changed with the time picker.
+  (tplNow.slots || []).forEach((h, line) => {
+    const t = marginTime(line);
+    labels.push({ text: t, x: 10, baseline: tplNow.baselines[line] - 14, limit: 54, size: 15, tone: t === hm(h) ? "muted" : "accent" });
+  });
   surface.setConverted(hidden, labels);
+}
+
+const marginTime = line => page.times?.[line] || (page.events || []).find(e => e.line === line && !e.part)?.time || hm(tplNow.slots[line]);
+
+// Tapping the hour in the margin opens a time picker for that line.
+function marginTap([, y], ev) {
+  const line = lineFinder(tplNow.baselines)(y);
+  if (!tplNow.slots || line >= tplNow.slots.length) return;
+  $("#pop")?.remove();
+  const pop = document.createElement("div"); pop.id = "pop"; pop.className = "pop menu";
+  pop.innerHTML = `<form class="row"><span>${STR.time}</span><input type="time" value="${marginTime(line)}" required><button class="primary">OK</button>
+    ${page.times?.[line] ? `<button type="button" class="ghost">${STR.reset}</button>` : ""}</form>`;
+  document.body.append(pop);
+  pop.style.left = Math.min(ev.clientX + 8, innerWidth - pop.offsetWidth - 8) + "px";
+  pop.style.top = Math.min(ev.clientY - 10, innerHeight - pop.offsetHeight - 8) + "px";
+  const set = async t => {
+    pop.remove();
+    const times = { ...page.times }; if (t) times[line] = t; else delete times[line];
+    page.times = times; page.events = extractEvents(); await putPage(page);
+    renderAgenda(); showConverted(); scheduleReminders();
+  };
+  $("form", pop).onsubmit = e => { e.preventDefault(); set($("input", pop).value); };
+  const reset = $(".ghost", pop); if (reset) reset.onclick = () => set("");
+  $("input", pop).focus();
 }
 
 // ---------- schedule (bullet journal) ----------
@@ -214,18 +289,31 @@ function extractEvents() {
     });
   }
   for (const it of page.items || []) events.push({ kind: "task", status: "open", ...it });
-  return events.sort((a, b) => a.time.localeCompare(b.time));
+  events.push(...dayReps);  // repeating items; all-day ones ("" time) sort first
+  return events.sort((a, b) => eventTime(a).localeCompare(eventTime(b)));
 }
-// Pages saved before exact times existed have { hour } events.
-const eventTime = e => e.time || hm(e.hour);
-// • task  ○ appointment  × done  > postponed; a cancelled item keeps its symbol and is struck through.
-const symbol = e => e.status === "done" || e.done ? "×" : e.status === "migrated" ? ">" : e.kind === "event" ? "○" : "•";
+// Pages saved before exact times existed have { hour } events; all-day items have time "".
+const eventTime = e => e.time ?? (e.hour != null ? hm(e.hour) : "");
+// • task  ○ appointment  🎂 birthday  × done  > postponed; a cancelled item keeps its symbol and is struck through.
+const symbol = e => e.status === "done" || e.done ? "×" : e.status === "migrated" ? ">" : e.kind === "birthday" ? "🎂" : e.kind === "event" ? "○" : "•";
 const shortDate = d => parseIso(d).toLocaleDateString(LANG, { weekday: "short", day: "numeric", month: "short" });
 
 async function updateItem(e, patch) {
-  if (e.line != null) { const k = partKey(e); page.meta = { ...page.meta, [k]: { ...page.meta?.[k], ...patch } }; }
-  else Object.assign(page.items.find(i => i.id === e.id), patch);
-  if (patch.time && e.line != null) page.times = { ...page.times, [partKey(e)]: patch.time };
+  const date = page.key.slice(4);
+  if (e.rid != null) {
+    await updateRecurring(e.rid, date, patch);
+    dayReps = await occurrences(date);
+  } else {
+    // Making a one-off item repeat starts a series from the next occurrence (today's item stays as written).
+    if (patch.repeat) {
+      await addRecurring({ text: e.text, time: patch.kind === "birthday" ? "" : eventTime(e), kind: patch.kind || e.kind, star: !!e.star,
+                           remind: e.remind || 0, repeat: patch.repeat, origin: date, start: iso(addDays(parseIso(date), 1)) });
+      delete patch.repeat;
+    }
+    if (e.line != null) { const k = partKey(e); page.meta = { ...page.meta, [k]: { ...page.meta?.[k], ...patch } }; }
+    else Object.assign(page.items.find(i => i.id === e.id), patch);
+    if (patch.time && e.line != null) page.times = { ...page.times, [partKey(e)]: patch.time };
+  }
   page.events = extractEvents();
   await putPage(page);
   renderAgenda(); showConverted(); scheduleReminders();
@@ -242,12 +330,20 @@ async function postpone(e, date, time) {
   await updateItem(e, { status: "migrated", to: date });
 }
 
-// Google Calendar's "create event" link: it opens the event pre-filled (one hour long) and you press Save.
+// Google Calendar's "create event" link: it opens the event pre-filled (one hour long, or all day) and you press Save.
+// Repeating items carry their rule, so a birthday is created as a yearly event.
+const RRULE = { daily: "FREQ=DAILY", weekdays: "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR", weekly: "FREQ=WEEKLY", monthly: "FREQ=MONTHLY", yearly: "FREQ=YEARLY" };
 function calendarLink(date, e) {
-  const [h, m] = eventTime(e).split(":").map(Number), end = Math.min(h * 60 + m + 60, 23 * 60 + 59);
-  const d = date.replace(/-/g, ""), t = mins => `${d}T${hm(Math.floor(mins / 60), mins % 60).replace(":", "")}00`;
-  const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
-  return `https://calendar.google.com/calendar/render?action=TEMPLATE&text=${encodeURIComponent(e.text)}&dates=${t(h * 60 + m)}/${t(end)}&ctz=${encodeURIComponent(tz)}`;
+  const d = date.replace(/-/g, ""), tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  let dates;
+  if (!eventTime(e)) dates = `${d}/${iso(addDays(parseIso(date), 1)).replace(/-/g, "")}`;
+  else {
+    const [h, m] = eventTime(e).split(":").map(Number), end = Math.min(h * 60 + m + 60, 23 * 60 + 59);
+    const t = mins => `${d}T${hm(Math.floor(mins / 60), mins % 60).replace(":", "")}00`;
+    dates = `${t(h * 60 + m)}/${t(end)}`;
+  }
+  const recur = e.repeat ? `&recur=${encodeURIComponent("RRULE:" + RRULE[e.repeat])}` : "";
+  return `https://calendar.google.com/calendar/render?action=TEMPLATE&text=${encodeURIComponent(e.text)}&dates=${dates}&ctz=${encodeURIComponent(tz)}${recur}`;
 }
 
 function renderAgenda() {
@@ -256,25 +352,34 @@ function renderAgenda() {
   const remindLabel = m => REMIND.find(([v]) => v === m)?.[1] || "";
   box.innerHTML = events.length ? events.map((e, i) => `<div class="event s-${e.status || "open"}">
       <button class="sym" data-i="${i}" aria-label="${STR.status}">${symbol(e)}</button>
-      <input type="time" class="time" data-i="${i}" value="${eventTime(e)}" aria-label="${STR.time}">
-      <span class="etext">${e.star ? '<b class="star">★</b> ' : ""}${esc(e.text)}
+      <input type="time" class="time" data-i="${i}" value="${eventTime(e)}" aria-label="${STR.time}" title="${eventTime(e) ? "" : STR.allDay}">
+      <span class="etext">${e.star ? '<b class="star">★</b> ' : ""}${esc(e.text)}${e.repeat ? ` <small title="${STR["rep_" + e.repeat]}">↻</small>` : ""}
         ${e.to ? `<small>&gt; ${esc(shortDate(e.to))}</small>` : ""}${e.from ? `<small>&lt; ${esc(shortDate(e.from))}</small>` : ""}</span>
       ${e.remind ? `<span class="bell" title="${STR.remind}: ${remindLabel(e.remind)}">🔔</span>` : ""}
       <a href="${calendarLink(date, e)}" target="_blank" rel="noopener" title="${STR.addCal}" aria-label="${STR.addCal}">📅</a></div>`).join("")
-    + `<p class="legend">• ${STR.task} · ○ ${STR.event} · × ${STR.done} · &gt; ${STR.migrate} · ★ ${STR.star}</p>`
+    + `<p class="legend">• ${STR.task} · ○ ${STR.event} · 🎂 ${STR.birthday} · × ${STR.done} · &gt; ${STR.migrate} · ★ ${STR.star} · ↻ ${STR.repeat}</p>`
     : `<p class="hint">${STR.noAgenda}</p>`;
-  // Typed entry, for any time (two things between 7 and 8) or when there is no pen at hand.
+  // Typed entry, for any time (two things between 7 and 8), all day (empty time), repeating, or with no pen at hand.
   const next = hm(Math.min(22, new Date().getHours() + 1));
-  box.insertAdjacentHTML("beforeend", `<form class="additem"><input type="time" value="${next}" required aria-label="${STR.time}">
-    <input type="text" placeholder="${STR.newItem}" required><button class="primary" aria-label="${STR.add}">+</button></form>`);
-  $(".additem", box).onsubmit = async ev => {
+  box.insertAdjacentHTML("beforeend", `<form class="additem">
+    <div class="row"><input type="time" value="${next}" aria-label="${STR.time}"><input type="text" placeholder="${STR.newItem}" required></div>
+    <div class="row"><select name="kind" aria-label="${STR.status}"><option value="task">• ${STR.task}</option><option value="event">○ ${STR.event}</option><option value="birthday">🎂 ${STR.birthday}</option></select>
+      <select name="repeat" aria-label="${STR.repeat}"><option value="">${STR.noRepeat}</option>${REPEATS.map(r => `<option value="${r}">↻ ${STR["rep_" + r]}</option>`).join("")}</select>
+      <button class="primary" aria-label="${STR.add}">+</button></div></form>`);
+  const form = $(".additem", box);
+  form.kind.onchange = () => { if (form.kind.value === "birthday") { form.repeat.value = "yearly"; form.querySelector("[type=time]").value = ""; } };
+  form.onsubmit = async ev => {
     ev.preventDefault();
-    const [t, x] = ev.target.querySelectorAll("input");
-    page.items = [...(page.items || []), { id: Date.now().toString(36), time: t.value, text: x.value.trim(), kind: "task", status: "open" }];
+    const time = form.querySelector("[type=time]").value, text = form.querySelector("[type=text]").value.trim();
+    const kind = form.kind.value, repeat = form.repeat.value;
+    if (repeat) {
+      await addRecurring({ text, time, kind, repeat, origin: date, start: date });
+      dayReps = await occurrences(date);
+    } else page.items = [...(page.items || []), { id: Date.now().toString(36), time, text, kind, status: "open" }];
     page.events = extractEvents(); await putPage(page);
     renderAgenda(); showConverted(); scheduleReminders();
   };
-  box.onchange = e => { const ev = events[+e.target.dataset.i]; if (ev && e.target.value) updateItem(ev, { time: e.target.value }); };
+  box.onchange = e => { const ev = events[+e.target.dataset.i]; if (ev && e.target.classList.contains("time")) updateItem(ev, { time: e.target.value }); };
   box.onclick = e => { const b = e.target.closest(".sym"); if (b) itemMenu(events[+b.dataset.i], b); };
 }
 
@@ -285,10 +390,12 @@ function itemMenu(e, anchor) {
   const pop = document.createElement("div"); pop.id = "pop"; pop.className = "pop menu";
   const btn = (act, label, on) => `<button data-act="${act}"${on ? ' class="on"' : ""}>${label}</button>`;
   const tomorrow = iso(addDays(parseIso(page.key.slice(4)), 1));
-  pop.innerHTML = `<div class="row">${btn("task", "• " + STR.task, e.kind !== "event")}${btn("event", "○ " + STR.event, e.kind === "event")}${btn("star", "★ " + STR.star, e.star)}</div>
+  const kinds = [["task", "•"], ["event", "○"], ["birthday", "🎂"]];
+  pop.innerHTML = `<div class="row">${kinds.map(([k, s]) => btn("k:" + k, `${s} ${STR[k]}`, (e.kind || "task") === k)).join("")}${btn("star", "★ " + STR.star, e.star)}</div>
     <div class="row">${btn("done", "× " + STR.done, e.status === "done")}${btn("cancelled", "⊘ " + STR.cancelItem, e.status === "cancelled")}${btn("open", "↺ " + STR.reopen)}</div>
+    <div class="row"><span>↻ ${STR.repeat}</span>${btn("p:", STR.noRepeat, !e.repeat)}${REPEATS.map(r => btn("p:" + r, STR["rep_" + r], e.repeat === r)).join("")}</div>
     <div class="row"><span>🔔 ${STR.remind}</span>${REMIND.map(([m, l]) => btn("r" + m, l, (e.remind || 0) === m)).join("")}</div>
-    <form class="row"><span>&gt; ${STR.migrate}</span><input type="date" value="${tomorrow}" required><input type="time" value="${eventTime(e)}"><button class="primary">${STR.move}</button></form>`;
+    ${e.rid == null ? `<form class="row"><span>&gt; ${STR.migrate}</span><input type="date" value="${tomorrow}" required><input type="time" value="${eventTime(e)}"><button class="primary">${STR.move}</button></form>` : ""}`;
   document.body.append(pop);
   const r = anchor.getBoundingClientRect();
   pop.style.left = Math.max(8, Math.min(r.left, innerWidth - pop.offsetWidth - 8)) + "px";
@@ -296,7 +403,9 @@ function itemMenu(e, anchor) {
   pop.onclick = async ev => {
     const act = ev.target.closest("button[data-act]")?.dataset.act; if (!act) return;
     pop.remove();
-    if (act === "task" || act === "event") return updateItem(e, { kind: act });
+    // A birthday repeats every year by default.
+    if (act.startsWith("k:")) { const kind = act.slice(2); return updateItem(e, { kind, ...(kind === "birthday" && !e.repeat ? { repeat: "yearly" } : {}) }); }
+    if (act.startsWith("p:")) { const repeat = act.slice(2); if (repeat || e.rid != null) return updateItem(e, { repeat }); return; }
     if (act === "star") return updateItem(e, { star: !e.star });
     if (act === "done" || act === "cancelled" || act === "open") return updateItem(e, { status: act, ...(act === "open" ? { to: null } : {}) });
     if (act[0] === "r") {
@@ -305,9 +414,10 @@ function itemMenu(e, anchor) {
       return updateItem(e, { remind: m });
     }
   };
-  $("form", pop).onsubmit = ev => {
+  const form = $("form", pop);
+  if (form) form.onsubmit = ev => {
     ev.preventDefault();
-    const [d, t] = pop.querySelectorAll("form input");
+    const [d, t] = form.querySelectorAll("input");
     pop.remove(); postpone(e, d.value, t.value);
   };
 }
@@ -354,15 +464,46 @@ function correct(i, anchor) {
 document.addEventListener("pointerdown", e => { const p = $("#pop"); if (p && !p.contains(e.target) && !e.target.closest(".word")) p.remove(); });
 
 // ---------- tools ----------
+// Pen style is remembered per device: pen colour ("" = theme ink), marker colour, width factor.
+const PEN_COLORS = ["", "#1f4fd8", "#d62f2f", "#1b8a4b", "#e07b00", "#7b3fd0", "#6b4b2a"];
+const MARKER_COLORS = ["", "#7fe08a", "#ff9fd0", "#8fd3ff", "#ffb36b"];  // "" = yellow
+const penPref = (k, d) => localStorage.getItem(k) ?? d;
+let tool = "pen";
+function applyPen() {
+  if (!surface) return;
+  surface.tool = tool;
+  surface.color = tool === "marker" ? penPref("markerColor", "") : penPref("penColor", "");
+  surface.widthFactor = +penPref("penWidth", "1");
+}
 function syncTools() {
   $("#tools").hidden = !surface;
   if (!surface) return;
-  for (const b of document.querySelectorAll("#tools [data-tool]")) b.classList.toggle("on", surface.tool === b.dataset.tool);
+  for (const b of document.querySelectorAll("#tools [data-tool]")) b.classList.toggle("on", tool === b.dataset.tool);
   $("#penOnly").classList.toggle("on", inkSettings.penOnly);
+  $("#penStyle .swatch").style.background = surface.color || (tool === "marker" ? "#ffd54a" : "var(--ink)");
+}
+function penMenu(anchor) {
+  $("#pop")?.remove();
+  const marker = tool === "marker", colors = marker ? MARKER_COLORS : PEN_COLORS, cur = marker ? penPref("markerColor", "") : penPref("penColor", "");
+  const pop = document.createElement("div"); pop.id = "pop"; pop.className = "pop menu";
+  pop.innerHTML = `<div class="row swatches">${colors.map(c => `<button data-c="${c}" class="sw${c === cur ? " on" : ""}" style="background:${c || (marker ? "#ffd54a" : "var(--ink)")}" aria-label="${c || STR.auto}"></button>`).join("")}</div>
+    <label class="row"><span>${STR.thickness}</span><input type="range" min="0.5" max="2.5" step="0.25" value="${penPref("penWidth", "1")}"></label>`;
+  document.body.append(pop);
+  const r = anchor.getBoundingClientRect();
+  pop.style.left = Math.max(8, Math.min(r.left - 60, innerWidth - pop.offsetWidth - 8)) + "px";
+  pop.style.top = (r.top - pop.offsetHeight - 10) + "px";
+  pop.onclick = e => {
+    const b = e.target.closest("[data-c]"); if (!b) return;
+    localStorage.setItem(marker ? "markerColor" : "penColor", b.dataset.c);
+    pop.querySelectorAll(".sw").forEach(x => x.classList.toggle("on", x === b));
+    applyPen(); syncTools();
+  };
+  $("input", pop).oninput = e => { localStorage.setItem("penWidth", e.target.value); applyPen(); };
 }
 $("#tools").onclick = e => {
   const b = e.target.closest("button"); if (!b || !surface) return;
-  if (b.dataset.tool) surface.tool = b.dataset.tool;
+  if (b.dataset.tool) { tool = b.dataset.tool; applyPen(); }
+  if (b.id === "penStyle") return penMenu(b);
   if (b.id === "undo") surface.undo();
   if (b.id === "redo") surface.redo();
   if (b.id === "penOnly") inkSettings.penOnly = !inkSettings.penOnly;
@@ -397,15 +538,21 @@ async function showSearch(q) {
   };
   $("#q").oninput = run; $("#q").focus(); run();
 }
-const pageHref = k => k.startsWith("day:") ? `#/day/${k.slice(4)}` : k.startsWith("week:") ? `#/week/${k.slice(5)}` : "#/notes";
+const pageHref = k => k.startsWith("day:") ? `#/day/${k.slice(4)}` : k.startsWith("week:") ? `#/week/${k.slice(5)}`
+  : k.startsWith("col:") ? `#/col/${k.split(":").slice(1).join("/")}` : "#/notes";
 const pageLabel = k => k.startsWith("day:") ? parseIso(k.slice(4)).toLocaleDateString(LANG, { weekday: "short", day: "numeric", month: "long", year: "numeric" })
-  : k.startsWith("week:") ? `${STR.week_n} ${k.slice(5)}` : STR.notes;
+  : k.startsWith("week:") ? `${STR.week_n} ${k.slice(5)}`
+  : k.startsWith("col:") && COLLECTIONS[k.split(":")[1]] ? `${colName(k.split(":")[1])} ${periodLabel(COLLECTIONS[k.split(":")[1]], k.split(":")[2])}` : STR.notes;
 
 // ---------- settings ----------
 $("#settingsBtn").onclick = () => {
   const dlg = $("#settings");
   dlg.innerHTML = `<form method="dialog"><h2>${STR.settings}</h2>
     <label>${STR.theme}: <select id="sTheme">${["auto", "light", "dark"].map(t => `<option value="${t}"${theme() === t ? " selected" : ""}>${STR[t]}</option>`).join("")}</select></label>
+    <label>${STR.paper}: <select id="sPaper">${PAPERS.map(p => `<option value="${p}"${(localStorage.getItem("paper") || "lined") === p ? " selected" : ""}>${STR["paper_" + p]}</option>`).join("")}</select></label>
+    <h3>${STR.collections}</h3>
+    <div class="colpick">${Object.entries(COLLECTIONS).map(([id, c]) => `<label><input type="checkbox" data-col="${id}" ${enabledCollections().includes(id) ? "checked" : ""}> ${c.icon} ${esc(c[LANG][0])}</label>`).join("")}</div>
+    <h3>${STR.writing}</h3>
     <label><input type="checkbox" id="sRecog" ${recognitionOn() ? "checked" : ""}> ${STR.recognition}</label>
     <label><input type="checkbox" id="sPen" ${inkSettings.penOnly ? "checked" : ""}> ${STR.penOnly}</label>
     <p>${STR.calib}: <b>${inkSettings.pressureMax.toFixed(2)}</b> <button type="button" id="sCal">${STR.reset}</button></p>
@@ -413,6 +560,11 @@ $("#settingsBtn").onclick = () => {
     <p class="hint">Ink Planner · MIT · <a href="https://github.com/" target="_blank" rel="noopener">GitHub</a></p>
     <button class="primary">OK</button></form>`;
   $("#sTheme").onchange = e => { localStorage.setItem("theme", e.target.value); applyTheme(); };
+  $("#sPaper").onchange = e => { localStorage.setItem("paper", e.target.value); if (location.hash.startsWith("#/notes")) route(); };
+  $(".colpick").onchange = () => {
+    localStorage.setItem("collections", JSON.stringify([...dlg.querySelectorAll("[data-col]:checked")].map(i => i.dataset.col)));
+    if (location.hash === "#/col") route();
+  };
   $("#sRecog").onchange = e => localStorage.setItem("recognition", e.target.checked ? "1" : "0");
   $("#sPen").onchange = e => { inkSettings.penOnly = e.target.checked; syncTools(); };
   $("#sCal").onclick = () => { localStorage.removeItem("pressureMax"); dlg.close(); };

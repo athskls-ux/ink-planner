@@ -20,14 +20,17 @@
   <nav id="views">
     <button id="todayBtn" class="today"></button>
     <a data-v="month" href="#/month"></a><a data-v="week" href="#/week"></a><a data-v="day" href="#/day"></a>
-    <a data-v="notes" href="#/notes"></a><a data-v="search" href="#/search"></a>
+    <a data-v="notes" href="#/notes"></a><a data-v="col" href="#/col"></a><a data-v="search" href="#/search"></a>
     <button id="settingsBtn" class="icon" aria-label="Settings">⚙</button>
   </nav>
   <div id="subnav"></div>
 </header>
 <div id="tools" class="tools" hidden>
   <button data-tool="pen" data-label="pen">✒</button>
+  <button data-tool="draw" data-label="drawTool">🖌</button>
+  <button data-tool="marker" data-label="marker">🖍</button>
   <button data-tool="eraser" data-label="eraser">⌫</button>
+  <button id="penStyle" data-label="penStyle"><span class="swatch"></span></button>
   <button id="undo" data-label="undo">↶</button>
   <button id="redo" data-label="redo">↷</button>
   <button id="convert" data-label="convert">Aa</button>

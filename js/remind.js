@@ -3,6 +3,8 @@
 // closed they are missed, and a missed reminder is shown on the next start if it is less than 15 minutes late.
 // Reliable reminders come with Google Calendar sync.
 import { allPages } from "./store.js";
+import { occurrences } from "./recurring.js";
+import { iso, addDays } from "./dates.js";
 
 const FIRED = "remindersFired";
 let timers = [];
@@ -19,10 +21,11 @@ export async function scheduleReminders() {
   timers.forEach(clearTimeout); timers = [];
   if (!("Notification" in window) || Notification.permission !== "granted") return;
   const done = fired(), now = Date.now();
-  for (const p of await allPages()) {
-    if (!p.key.startsWith("day:")) continue;
-    const date = p.key.slice(4);
-    for (const e of p.events || []) {
+  // Day pages hold one-off items; repeating items are expanded for today and tomorrow.
+  const days = (await allPages()).filter(p => p.key.startsWith("day:")).map(p => [p.key.slice(4), (p.events || []).filter(e => e.rid == null)]);
+  for (const d of [0, 1].map(n => iso(addDays(new Date(), n)))) days.push([d, await occurrences(d)]);
+  for (const [date, events] of days) {
+    for (const e of events) {
       if (!e.remind || !e.time || ["done", "cancelled", "migrated"].includes(e.status)) continue;
       const at = new Date(`${date}T${e.time}`).getTime() - e.remind * 60000;
       const id = `${date}|${e.time}|${e.text}|${e.remind}`;
