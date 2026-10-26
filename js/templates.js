@@ -22,7 +22,7 @@ export function dayTemplate() {
   const height = top + lines * GAP;
   // slots[line] = hour of that schedule line; whatever is written there is an appointment or task.
   const slots = Array.from({ length: 16 }, (_, k) => 7 + k);
-  return { height, baselines, slots, background: svg(height, body) };
+  return { height, baselines, slots, textX: 92, background: svg(height, body) };
 }
 
 // Week: seven day sections of three lines each.
@@ -38,7 +38,7 @@ export function weekTemplate(start, lang) {
     for (let k = 1; k <= per; k++) { baselines.push(y + k * GAP); body += rule(y + k * GAP); }
     y += per * GAP + 14;
   }
-  return { height: y, baselines, days, background: svg(y, body) };
+  return { height: y, baselines, days, textX: 16, background: svg(y, body) };
 }
 
 // A free notes page: just lines.
@@ -47,7 +47,7 @@ export function notesTemplate() {
   let body = "";
   for (let k = 0; k < lines; k++) { const y = top + k * GAP; baselines.push(y); body += rule(y); }
   const height = top + lines * GAP;
-  return { height, baselines, background: svg(height, body) };
+  return { height, baselines, textX: 16, background: svg(height, body) };
 }
 
 // Map a stroke's vertical centre to the ruled line it was written on.

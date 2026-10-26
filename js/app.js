@@ -15,14 +15,14 @@ const STR = {
         noResults: "Δεν βρέθηκε τίποτα.", settings: "Ρυθμίσεις", recognition: "Αναγνώριση χειρογράφου", backup: "Αντίγραφο ασφαλείας (JSON)", restore: "Επαναφορά από αντίγραφο",
         calib: "Βαθμονόμηση πίεσης", reset: "Επαναφορά", week_n: "Εβδομάδα", tapFix: "Πάτα μια λέξη για να τη διορθώσεις.", restored: "Η επαναφορά ολοκληρώθηκε.",
         convert: "Μετατροπή σε κείμενο", showInk: "Δείξε το χειρόγραφο", agenda: "Πρόγραμμα", addCal: "Πρόσθεσε στο Google Calendar",
-        noAgenda: "Γράψε δίπλα σε μια ώρα για να κλείσεις ραντεβού ή δουλειά.", done: "Έγινε" },
+        noAgenda: "Γράψε δίπλα σε μια ώρα, ή γράψε μια ώρα μπροστά (π.χ. 10:30), για ραντεβού ή δουλειά.", done: "Έγινε", time: "Ώρα" },
   en: { today: "Today", month: "Month", week: "Week", day: "Day", notes: "Notes", search: "Search", pen: "Pen", eraser: "Eraser",
         undo: "Undo", redo: "Redo", penOnly: "Pen only", text: "Text", recognising: "Recognising…", offline: "Offline: recognition will run later",
         empty: "Write with the pen; the text appears here.", fix: "Correct", save: "Save", cancel: "Cancel", searchHint: "Search your handwriting…",
         noResults: "Nothing found.", settings: "Settings", recognition: "Handwriting recognition", backup: "Backup (JSON)", restore: "Restore from backup",
         calib: "Pressure calibration", reset: "Reset", week_n: "Week", tapFix: "Tap a word to correct it.", restored: "Restore complete.",
         convert: "Convert to text", showInk: "Show handwriting", agenda: "Schedule", addCal: "Add to Google Calendar",
-        noAgenda: "Write next to an hour to add an appointment or task.", done: "Done" },
+        noAgenda: "Write next to an hour, or start a line with a time (e.g. 10:30), to add an appointment or task.", done: "Done", time: "Time" },
 }[LANG];
 
 const $ = (s, el = document) => el.querySelector(s);
@@ -67,7 +67,7 @@ async function showMonth(d) {
     const day = addDays(start, i);
     // Appointments first (with their time), then the day's other notes.
     const p = pages.get("day:" + iso(day));
-    const snippet = (p?.events?.length ? p.events.filter(e => !e.done).map(e => `${hh(e.hour)} ${e.text}`) : (p?.text || "").split("\n").filter(Boolean)).slice(0, 3);
+    const snippet = (p?.events?.length ? p.events.filter(e => !e.done).map(e => `${eventTime(e)} ${e.text}`) : (p?.text || "").split("\n").filter(Boolean)).slice(0, 3);
     const ink = p?.strokes?.length && !snippet.length;
     cells += `<a class="cell${day.getMonth() !== first.getMonth() ? " out" : ""}${sameDay(day, today) ? " today" : ""}" href="#/day/${iso(day)}">
       <span class="num">${day.getDate()}</span>${snippet.map(s => `<span class="snip">${esc(s)}</span>`).join("")}${ink ? `<span class="dot"></span>` : ""}</a>`;
@@ -147,46 +147,68 @@ function showConverted() {
     if (!isConverted(w) || !w.text) return;
     hidden.push(...w.key.split(".").map(Number));
     const prev = words[i - 1], sameLine = o => o.line === w.line;
-    // A run of converted words on one line reads as one sentence: each follows the previous with a normal space.
-    const join = !!prev && sameLine(prev) && isConverted(prev) && !!prev.text;
+    // A run of converted words on one line reads as one sentence: it starts at the beginning of the line
+    // (unless handwriting precedes it) and each word follows the previous with a normal space.
+    const first = !prev || !sameLine(prev);
+    const join = !first && isConverted(prev) && !!prev.text;
     const nextInk = words.slice(i + 1).find(o => sameLine(o) && !isConverted(o));
-    labels.push({ text: w.text, x: w.x, join, baseline: (tplNow.baselines[w.line] ?? w.y + w.h) - 10, limit: (nextInk ? nextInk.x : 1000) - 8 });
+    labels.push({ text: w.text, x: first ? tplNow.textX : w.x, join, baseline: (tplNow.baselines[w.line] ?? w.y + w.h) - 10, limit: (nextInk ? nextInk.x : 1000) - 8 });
   });
   surface.setConverted(hidden, labels);
 }
 
 // ---------- schedule ----------
-// On a day page, each hour line with writing on it is an appointment or task: { hour, text, done }.
+// On a day page, a line becomes an appointment or task { line, time, text, done } when it is on an hour line
+// or starts with a written time ("10:30 Οδοντίατρος", also in the notes area). The time comes from, in order:
+// a time picked in the schedule list, a time written at the start of the line, the hour of the line.
+const TIME = /^\s*([01]?\d|2[0-3])\s*[:.·]\s*([0-5]\d)(?!\d)\s*/;
+const hm = (h, m = 0) => `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
 function extractEvents() {
   if (!tplNow?.slots) return undefined;
-  const done = new Set((page.events || []).filter(e => e.done).map(e => e.hour + "|" + e.text));
-  return tplNow.slots.map((hour, line) => {
-    const text = (page.words || []).filter(w => w.line === line && w.text).sort((a, b) => a.x - b.x).map(w => w.text).join(" ");
-    return text && { hour, text, done: done.has(hour + "|" + text) };
-  }).filter(Boolean);
+  const done = new Set((page.events || []).filter(e => e.done).map(e => e.line + "|" + e.text));
+  const picked = page.times || {}, lines = new Map();
+  for (const w of [...(page.words || [])].sort((a, b) => a.x - b.x)) if (w.text) (lines.get(w.line) || lines.set(w.line, []).get(w.line)).push(w.text);
+  const events = [];
+  for (const [line, ws] of lines) {
+    let text = ws.join(" "), time = null;
+    const m = text.match(TIME);
+    if (m && text.slice(m[0].length).trim()) { time = hm(+m[1], +m[2]); text = text.slice(m[0].length).trim(); }
+    time = picked[line] || time || (line < tplNow.slots.length ? hm(tplNow.slots[line]) : null);
+    if (time) events.push({ line, time, text, done: done.has(line + "|" + text) });
+  }
+  return events.sort((a, b) => a.time.localeCompare(b.time));
 }
+// Pages saved before exact times existed have { hour } events.
+const eventTime = e => e.time || hm(e.hour);
 
-const hh = h => String(h).padStart(2, "0") + ":00";
-// Google Calendar's "create event" link: it opens the event pre-filled and you press Save. No account setup needed.
+// Google Calendar's "create event" link: it opens the event pre-filled (one hour long) and you press Save.
 function calendarLink(date, e) {
-  const d = date.replace(/-/g, ""), t = h => `${d}T${String(h).padStart(2, "0")}0000`;
+  const [h, m] = eventTime(e).split(":").map(Number), end = Math.min(h * 60 + m + 60, 23 * 60 + 59);
+  const d = date.replace(/-/g, ""), t = mins => `${d}T${hm(Math.floor(mins / 60), mins % 60).replace(":", "")}00`;
   const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
-  return `https://calendar.google.com/calendar/render?action=TEMPLATE&text=${encodeURIComponent(e.text)}&dates=${t(e.hour)}/${t(e.hour + 1)}&ctz=${encodeURIComponent(tz)}`;
+  return `https://calendar.google.com/calendar/render?action=TEMPLATE&text=${encodeURIComponent(e.text)}&dates=${t(h * 60 + m)}/${t(end)}&ctz=${encodeURIComponent(tz)}`;
 }
 
 function renderAgenda() {
   const box = $("#agenda"); if (!box) return;
   const events = page.events || [], date = page.key.slice(4);
   box.innerHTML = events.length ? events.map((e, i) => `<div class="event${e.done ? " done" : ""}">
-      <label><input type="checkbox" data-i="${i}" ${e.done ? "checked" : ""} aria-label="${STR.done}"><b>${hh(e.hour)}</b> <span>${esc(e.text)}</span></label>
+      <input type="checkbox" data-i="${i}" ${e.done ? "checked" : ""} aria-label="${STR.done}">
+      <input type="time" class="time" data-i="${i}" value="${eventTime(e)}" aria-label="${STR.time}">
+      <span>${esc(e.text)}</span>
       <a href="${calendarLink(date, e)}" target="_blank" rel="noopener" title="${STR.addCal}" aria-label="${STR.addCal}">📅</a></div>`).join("")
     : `<p class="hint">${STR.noAgenda}</p>`;
-  box.onchange = async e => { const ev = events[+e.target.dataset.i]; if (!ev) return; ev.done = e.target.checked; await putPage(page); renderAgenda(); };
+  box.onchange = async e => {
+    const ev = events[+e.target.dataset.i]; if (!ev) return;
+    if (e.target.type === "checkbox") ev.done = e.target.checked;
+    if (e.target.type === "time" && e.target.value) { page.times = { ...page.times, [ev.line]: e.target.value }; page.events = extractEvents(); }
+    await putPage(page); renderAgenda();
+  };
 }
 
 function renderWords() {
   showConverted();
-  if (tplNow?.slots && !page.events && page.words?.length) page.events = extractEvents();
+  if (tplNow?.slots && page.words?.length && (!page.events || page.events.some(e => !e.time))) page.events = extractEvents();
   renderAgenda();
   const box = $("#words"); if (!box) return;
   const words = page.words || [];

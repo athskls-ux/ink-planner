@@ -60,7 +60,9 @@ function fixAccents(tok) {
 export function rerank(cands) {
   const seen = new Set(), scored = [];
   cands.forEach((c, i) => {
-    const toks = tokens(c); if (!toks.length) return;
+    const toks = tokens(c);
+    // Numbers and times ("10:30") have no letters; they rank like an ordinary known word.
+    if (!toks.length) { const t = c.trim(); if (/\d/.test(t) && !seen.has(t)) { seen.add(t); scored.push({ text: t, score: -2.5 - i * 0.12 }); } return; }
     const lead = c.match(/^[^\p{L}]*/u)[0], tail = c.match(/[^\p{L}]*$/u)[0];
     const fixedToks = toks.map(fixAccents), fixed = lead + fixedToks.join(" ") + tail;
     // The recogniser's own order still counts a little.

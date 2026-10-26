@@ -11,6 +11,11 @@ recognition. It runs in the browser as an installable web app (PWA), with no acc
 - **Dictionary correction:** the recogniser's guesses are re-ranked with Greek and English word-frequency lists, missing
   Greek accents are restored (μετα → μετά), and every word you correct goes into a personal dictionary, so it
   learns your vocabulary.
+- **Typed text on the page:** corrected words replace their handwriting (the ink is kept and can be shown again);
+  the **Aa** button converts a whole page.
+- **Appointments and tasks:** anything written on an hour line of a day page, or any line that starts with a time
+  such as `10:30`, appears in the day's schedule with its time. You can tick it off, change the time from a time
+  picker, and add it to Google Calendar with one tap. Month view lists each day's appointments.
 - **Search** across everything you have written.
 - **Works offline:** pages are stored on the device (IndexedDB) and recognised when you are back online. Backup and
   restore use a JSON file.
