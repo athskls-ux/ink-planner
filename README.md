@@ -33,7 +33,12 @@ recognition. It runs in the browser as an installable web app (PWA), with no acc
 - **Works offline:** pages are stored on the device (IndexedDB) and recognised when you are back online. Backup and
   restore use a JSON file.
 
-## Run it
+## Use it
+
+Open **https://athskls-ux.github.io/ink-planner/** in Chrome and install it (Settings → Install as an app, or the
+browser menu → Install app). It then runs from its own icon, full screen, and works offline.
+
+## Run it locally
 
 It is a static site with no build step. Serve the folder with any web server, for example:
 

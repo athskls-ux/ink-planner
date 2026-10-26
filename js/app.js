@@ -612,7 +612,7 @@ $("#settingsBtn").onclick = () => {
     <p>${matchMedia("(display-mode: standalone)").matches ? `✓ ${STR.installed}`
          : installPrompt ? `<button type="button" id="sInstall" class="primary">📲 ${STR.install}</button>` : `<span class="hint">📲 ${STR.installHint}</span>`}</p>
     <p><button type="button" id="sExport">${STR.backup}</button> <label class="file">${STR.restore}<input type="file" id="sImport" accept="application/json" hidden></label></p>
-    <p class="hint">Ink Planner · MIT · <a href="https://github.com/" target="_blank" rel="noopener">GitHub</a></p>
+    <p class="hint">Ink Planner · MIT · <a href="https://github.com/athskls-ux/ink-planner" target="_blank" rel="noopener">GitHub</a></p>
     <button class="primary">OK</button></form>`;
   $("#sInstall") && ($("#sInstall").onclick = async () => { await installPrompt.prompt(); installPrompt = null; dlg.close(); });
   $("#sTheme").onchange = e => { localStorage.setItem("theme", e.target.value); applyTheme(); };
