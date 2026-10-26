@@ -1,0 +1,9 @@
+Ink Planner includes word-frequency lists from FrequencyWords by Hermit Dave
+(https://github.com/hermitdave/FrequencyWords), derived from OpenSubtitles 2018.
+
+  data/el-words.txt  - top 40,000 Greek words (words only, counts removed)
+  data/en-words.txt  - top 20,000 English words (words only, counts removed)
+
+These files are licensed under Creative Commons Attribution-ShareAlike 4.0
+(https://creativecommons.org/licenses/by-sa/4.0/). They were filtered to keep
+alphabetic words only.
