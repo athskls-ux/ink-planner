@@ -24,7 +24,9 @@ const STR = {
         remind: "Υπενθύμιση", migrate: "Μετάθεση", move: "Μετάθεση", notifOff: "Οι ειδοποιήσεις είναι κλειστές για αυτή τη σελίδα στον browser.",
         newItem: "Νέο ραντεβού ή δουλειά…", add: "Προσθήκη", theme: "Εμφάνιση", auto: "Αυτόματο", light: "Φωτεινό", dark: "Σκούρο",
         allDay: "Όλη μέρα", birthday: "Γενέθλια", repeat: "Επανάληψη", noRepeat: "Χωρίς", rep_daily: "Κάθε μέρα", rep_weekdays: "Καθημερινές",
-        rep_weekly: "Κάθε εβδομάδα", rep_monthly: "Κάθε μήνα", rep_yearly: "Κάθε χρόνο", thickness: "Πάχος", drawTool: "Σχέδιο (χωρίς αναγνώριση)",
+        rep_weekly: "Κάθε εβδομάδα", rep_monthly: "Κάθε μήνα", rep_yearly: "Κάθε χρόνο", thickness: "Πάχος", isDrawing: "Σχέδιο, όχι κείμενο", isText: "Είναι κείμενο",
+        hour: "Ώρα", minutes: "Λεπτά", install: "Εγκατάσταση ως εφαρμογή", installed: "Εγκατεστημένη εφαρμογή",
+        installHint: "Στο Chrome: μενού ⋮ → «Εγκατάσταση εφαρμογής» ή «Προσθήκη στην αρχική οθόνη».",
         marker: "Μαρκαδόρος", penStyle: "Χρώμα και πάχος", col: "Συλλογές", collections: "Συλλογές", moreCols: "Περισσότερες",
         moreColsHint: "Διάλεξε trackers και λίστες στις Ρυθμίσεις.", paper: "Χαρτί σημειώσεων", paper_lined: "Γραμμές", paper_dotted: "Τελείες",
         paper_grid: "Τετράγωνα", paper_blank: "Λευκό", writing: "Γραφή" },
@@ -39,7 +41,9 @@ const STR = {
         remind: "Reminder", migrate: "Postpone", move: "Move", notifOff: "Notifications are blocked for this page in the browser.",
         newItem: "New appointment or task…", add: "Add", theme: "Appearance", auto: "Automatic", light: "Light", dark: "Dark",
         allDay: "All day", birthday: "Birthday", repeat: "Repeat", noRepeat: "None", rep_daily: "Daily", rep_weekdays: "Weekdays",
-        rep_weekly: "Weekly", rep_monthly: "Monthly", rep_yearly: "Yearly", thickness: "Thickness", drawTool: "Drawing (not recognised)",
+        rep_weekly: "Weekly", rep_monthly: "Monthly", rep_yearly: "Yearly", thickness: "Thickness", isDrawing: "Drawing, not text", isText: "It is text",
+        hour: "Hour", minutes: "Minutes", install: "Install as an app", installed: "Installed app",
+        installHint: "In Chrome: menu ⋮ → “Install app” or “Add to Home screen”.",
         marker: "Highlighter", penStyle: "Colour and thickness", col: "Collections", collections: "Collections", moreCols: "More",
         moreColsHint: "Choose trackers and lists in Settings.", paper: "Notes paper", paper_lined: "Lined", paper_dotted: "Dotted",
         paper_grid: "Grid", paper_blank: "Blank", writing: "Writing" },
@@ -166,28 +170,44 @@ async function showInk(key, tpl, title) {
   syncTools();
   renderWords();
   // Pages written while offline (or before recognition was on) get recognised on open.
-  if (tpl.recognize !== false && page.strokes.length && (!page.words?.length || page.words.some(w => w.error))) scheduleRecognition(tpl, 300);
+  if (tpl.recognize !== false && (page.words || []).some(w => w.error) || unrecognised().length) scheduleRecognition(tpl, 300);
+}
+
+// Handwriting strokes that no word covers yet (written offline, or with the old drawing pen).
+function unrecognised() {
+  if (tplNow?.recognize === false) return [];
+  const covered = new Set((page.words || []).flatMap(w => w.key.split(".").map(Number)));
+  return page.strokes.filter(s => !s.hl && !covered.has(s.id));
 }
 
 function scheduleSave() { clearTimeout(saveTimer); saveTimer = setTimeout(() => putPage(page), 500); }
 
-function scheduleRecognition(tpl, delay = 1600) {
+// Words are recognised soon after the pen lifts (only new or changed words are sent), and at least every 2.5 s
+// while writing continues. A run that finishes after a newer one has started is dropped.
+let recogSince = 0, recogRun = 0;
+function scheduleRecognition(tpl, delay = 700) {
   clearTimeout(recogTimer);
   if (!recognitionOn()) return;
+  const now = Date.now();
+  recogSince ||= now;
   recogTimer = setTimeout(async () => {
-    const status = $("#rstatus");
+    recogSince = 0;
+    const run = ++recogRun, status = $("#rstatus");
     if (!navigator.onLine) { status && (status.textContent = STR.offline); return; }
     status && (status.textContent = STR.recognising);
     const current = page;
     await loadLexicon();
-    // Drawings and marker strokes are not handwriting.
-    const words = await recognise(current.strokes.filter(s => !s.draw && !s.hl), lineFinder(tpl.baselines), current.words);
-    if (current !== page) return;
+    // Marker strokes are not handwriting. (Drawings are words the writer marked as drawing; see the word popover.)
+    const found = await recognise(current.strokes.filter(s => !s.hl), lineFinder(tpl.baselines), current.words);
+    if (current !== page || run !== recogRun) return;
+    // Corrections made while this run was in flight win.
+    const latest = new Map((page.words || []).map(w => [w.key, w]));
+    const words = found.map(w => latest.has(w.key) ? { ...w, ...latest.get(w.key), line: w.line, x: w.x, y: w.y, w: w.w, h: w.h } : w);
     page.words = words; page.text = pageText(words); page.events = extractEvents();
     await putPage(page);
     renderWords();
     $("#rstatus") && ($("#rstatus").textContent = "");
-  }, delay);
+  }, Math.max(0, Math.min(delay, recogSince + 2500 - now)));
 }
 
 // Corrected (or converted) words are shown on the page as typed text, sitting on the ruled line they were written on.
@@ -199,7 +219,7 @@ function showConverted() {
   const hidden = [], labels = [], baseline = line => tplNow.baselines[line] - 10;
   const byLine = new Map((page.events || []).filter(e => e.line != null && !e.part).map(e => [e.line, e]));
   words.forEach((w, i) => {
-    if (!isConverted(w) || !w.text) return;
+    if (!isConverted(w) || !w.text || w.drawing) return;
     hidden.push(...w.key.split(".").map(Number));
     const prev = words[i - 1], sameLine = o => o.line === w.line;
     // A run of converted words on one line reads as one sentence: it starts at the beginning of the line
@@ -230,26 +250,46 @@ function showConverted() {
 
 const marginTime = line => page.times?.[line] || (page.events || []).find(e => e.line === line && !e.part)?.time || hm(tplNow.slots[line]);
 
-// Tapping the hour in the margin opens a time picker for that line.
+// Time picker made for a pen: a grid of hours, a grid of minutes in fives, and ±1 for an exact minute.
+// `extra` is an optional second button { label, value } (reset, all day); onPick gets "HH:MM" or that value.
+function timePicker(x, y, value, onPick, extra) {
+  $("#pop")?.remove();
+  let [h, m] = (value || hm(new Date().getHours() + 1)).split(":").map(Number);
+  const pop = document.createElement("div"); pop.id = "pop"; pop.className = "pop menu tp";
+  pop.innerHTML = `<div class="tp-head"><span>${STR.hour}</span><b class="tp-val"></b></div>
+    <div class="tp-grid hours">${Array.from({ length: 24 }, (_, i) => `<button data-h="${i}">${String(i).padStart(2, "0")}</button>`).join("")}</div>
+    <div class="tp-head"><span>${STR.minutes}</span><span><button data-d="-1">−1</button> <button data-d="1">+1</button></span></div>
+    <div class="tp-grid mins">${Array.from({ length: 12 }, (_, i) => `<button data-m="${i * 5}">:${String(i * 5).padStart(2, "0")}</button>`).join("")}</div>
+    <div class="row">${extra ? `<button class="ghost" data-x>${extra.label}</button>` : ""}<button class="primary" data-ok>OK</button></div>`;
+  document.body.append(pop);
+  const show = () => {
+    $(".tp-val", pop).textContent = hm(h, m);
+    pop.querySelectorAll("[data-h]").forEach(b => b.classList.toggle("on", +b.dataset.h === h));
+    pop.querySelectorAll("[data-m]").forEach(b => b.classList.toggle("on", +b.dataset.m === m));
+  };
+  show();
+  pop.style.left = Math.max(8, Math.min(x + 8, innerWidth - pop.offsetWidth - 8)) + "px";
+  pop.style.top = Math.max(8, Math.min(y - 10, innerHeight - pop.offsetHeight - 8)) + "px";
+  pop.onclick = e => {
+    const b = e.target.closest("button"); if (!b) return;
+    if (b.dataset.h) h = +b.dataset.h;
+    if (b.dataset.m) m = +b.dataset.m;
+    if (b.dataset.d) m = (m + +b.dataset.d + 60) % 60;
+    if (b.hasAttribute("data-ok")) { pop.remove(); return onPick(hm(h, m)); }
+    if (b.hasAttribute("data-x")) { pop.remove(); return onPick(extra.value); }
+    show();
+  };
+}
+
+// Tapping the hour in the margin opens the time picker for that line.
 function marginTap([, y], ev) {
   const line = lineFinder(tplNow.baselines)(y);
   if (!tplNow.slots || line >= tplNow.slots.length) return;
-  $("#pop")?.remove();
-  const pop = document.createElement("div"); pop.id = "pop"; pop.className = "pop menu";
-  pop.innerHTML = `<form class="row"><span>${STR.time}</span><input type="time" value="${marginTime(line)}" required><button class="primary">OK</button>
-    ${page.times?.[line] ? `<button type="button" class="ghost">${STR.reset}</button>` : ""}</form>`;
-  document.body.append(pop);
-  pop.style.left = Math.min(ev.clientX + 8, innerWidth - pop.offsetWidth - 8) + "px";
-  pop.style.top = Math.min(ev.clientY - 10, innerHeight - pop.offsetHeight - 8) + "px";
-  const set = async t => {
-    pop.remove();
+  timePicker(ev.clientX, ev.clientY, marginTime(line), async t => {
     const times = { ...page.times }; if (t) times[line] = t; else delete times[line];
     page.times = times; page.events = extractEvents(); await putPage(page);
     renderAgenda(); showConverted(); scheduleReminders();
-  };
-  $("form", pop).onsubmit = e => { e.preventDefault(); set($("input", pop).value); };
-  const reset = $(".ghost", pop); if (reset) reset.onclick = () => set("");
-  $("input", pop).focus();
+  }, page.times?.[line] ? { label: STR.reset, value: "" } : null);
 }
 
 // ---------- schedule (bullet journal) ----------
@@ -279,7 +319,7 @@ function extractEvents() {
   for (const e of page.events || []) if (e.done && e.line != null && !meta[e.line]) meta[e.line] = { status: "done" };  // older pages
   page.meta = meta;
   const picked = page.times || {}, lines = new Map();
-  for (const w of [...(page.words || [])].sort((a, b) => a.x - b.x)) if (w.text) (lines.get(w.line) || lines.set(w.line, []).get(w.line)).push(w.text);
+  for (const w of [...(page.words || [])].sort((a, b) => a.x - b.x)) if (w.text && !w.drawing) (lines.get(w.line) || lines.set(w.line, []).get(w.line)).push(w.text);
   const events = [];
   for (const [line, ws] of lines) {
     splitLine(ws.join(" ")).forEach((p, part) => {
@@ -352,7 +392,7 @@ function renderAgenda() {
   const remindLabel = m => REMIND.find(([v]) => v === m)?.[1] || "";
   box.innerHTML = events.length ? events.map((e, i) => `<div class="event s-${e.status || "open"}">
       <button class="sym" data-i="${i}" aria-label="${STR.status}">${symbol(e)}</button>
-      <input type="time" class="time" data-i="${i}" value="${eventTime(e)}" aria-label="${STR.time}" title="${eventTime(e) ? "" : STR.allDay}">
+      <button class="time" data-i="${i}" aria-label="${STR.time}">${eventTime(e) || STR.allDay}</button>
       <span class="etext">${e.star ? '<b class="star">★</b> ' : ""}${esc(e.text)}${e.repeat ? ` <small title="${STR["rep_" + e.repeat]}">↻</small>` : ""}
         ${e.to ? `<small>&gt; ${esc(shortDate(e.to))}</small>` : ""}${e.from ? `<small>&lt; ${esc(shortDate(e.from))}</small>` : ""}</span>
       ${e.remind ? `<span class="bell" title="${STR.remind}: ${remindLabel(e.remind)}">🔔</span>` : ""}
@@ -362,15 +402,17 @@ function renderAgenda() {
   // Typed entry, for any time (two things between 7 and 8), all day (empty time), repeating, or with no pen at hand.
   const next = hm(Math.min(22, new Date().getHours() + 1));
   box.insertAdjacentHTML("beforeend", `<form class="additem">
-    <div class="row"><input type="time" value="${next}" aria-label="${STR.time}"><input type="text" placeholder="${STR.newItem}" required></div>
+    <div class="row"><button type="button" class="time" data-v="${next}" aria-label="${STR.time}">${next}</button><input type="text" placeholder="${STR.newItem}" required></div>
     <div class="row"><select name="kind" aria-label="${STR.status}"><option value="task">• ${STR.task}</option><option value="event">○ ${STR.event}</option><option value="birthday">🎂 ${STR.birthday}</option></select>
       <select name="repeat" aria-label="${STR.repeat}"><option value="">${STR.noRepeat}</option>${REPEATS.map(r => `<option value="${r}">↻ ${STR["rep_" + r]}</option>`).join("")}</select>
       <button class="primary" aria-label="${STR.add}">+</button></div></form>`);
-  const form = $(".additem", box);
-  form.kind.onchange = () => { if (form.kind.value === "birthday") { form.repeat.value = "yearly"; form.querySelector("[type=time]").value = ""; } };
+  const form = $(".additem", box), tbtn = $(".time", form);
+  const setT = t => { tbtn.dataset.v = t; tbtn.textContent = t || STR.allDay; };
+  tbtn.onclick = e => timePicker(e.clientX, e.clientY, tbtn.dataset.v, setT, { label: STR.allDay, value: "" });
+  form.kind.onchange = () => { if (form.kind.value === "birthday") { form.repeat.value = "yearly"; setT(""); } };
   form.onsubmit = async ev => {
     ev.preventDefault();
-    const time = form.querySelector("[type=time]").value, text = form.querySelector("[type=text]").value.trim();
+    const time = tbtn.dataset.v, text = form.querySelector("[type=text]").value.trim();
     const kind = form.kind.value, repeat = form.repeat.value;
     if (repeat) {
       await addRecurring({ text, time, kind, repeat, origin: date, start: date });
@@ -379,8 +421,12 @@ function renderAgenda() {
     page.events = extractEvents(); await putPage(page);
     renderAgenda(); showConverted(); scheduleReminders();
   };
-  box.onchange = e => { const ev = events[+e.target.dataset.i]; if (ev && e.target.classList.contains("time")) updateItem(ev, { time: e.target.value }); };
-  box.onclick = e => { const b = e.target.closest(".sym"); if (b) itemMenu(events[+b.dataset.i], b); };
+  box.onclick = e => {
+    const b = e.target.closest(".sym, .event .time"); if (!b) return;
+    const ev = events[+b.dataset.i];
+    if (b.classList.contains("sym")) return itemMenu(ev, b);
+    timePicker(e.clientX, e.clientY, eventTime(ev), t => updateItem(ev, { time: t }), ev.line == null ? { label: STR.allDay, value: "" } : null);
+  };
 }
 
 const REMIND = [[0, "—"], [10, "10′"], [30, "30′"], [60, "1h"], [1440, "1d"]];
@@ -432,7 +478,7 @@ function renderWords() {
   const lines = new Map();
   words.forEach((w, i) => (lines.get(w.line) || lines.set(w.line, []).get(w.line)).push([w, i]));
   box.innerHTML = [...lines.keys()].sort((a, b) => a - b).map(l => `<div class="tline">${lines.get(l).map(([w, i]) =>
-    `<button class="word${w.fixed ? " fixed" : ""}${w.error ? " err" : ""}" data-i="${i}">${esc(w.text || "?")}</button>`).join("")}</div>`).join("");
+    `<button class="word${w.fixed ? " fixed" : ""}${w.error ? " err" : ""}${w.drawing ? " drawing" : ""}" data-i="${i}">${w.drawing ? "🖌" : esc(w.text || "?")}</button>`).join("")}</div>`).join("");
   box.onclick = e => { const b = e.target.closest(".word"); if (b) correct(+b.dataset.i, b); };
 }
 
@@ -443,7 +489,8 @@ function correct(i, anchor) {
   const pop = document.createElement("div"); pop.id = "pop"; pop.className = "pop";
   pop.innerHTML = `<div class="cands">${(w.cands || []).map(c => `<button>${esc(c)}</button>`).join("")}</div>
     <form><input value="${esc(w.text || "")}" autocomplete="off" autocapitalize="off" spellcheck="false"><button class="primary">${STR.save}</button><button type="button" class="ghost">${STR.cancel}</button></form>
-    ${isConverted(w) ? `<button type="button" class="ghost back">✍ ${STR.showInk}</button>` : ""}`;
+    <div class="row">${isConverted(w) ? `<button type="button" class="ghost back">✍ ${STR.showInk}</button>` : ""}
+      <button type="button" class="ghost drawbtn">${w.drawing ? "✍ " + STR.isText : "🖌 " + STR.isDrawing}</button></div>`;
   document.body.append(pop);
   const r = anchor.getBoundingClientRect();
   pop.style.left = Math.max(8, Math.min(r.left, innerWidth - pop.offsetWidth - 8)) + "px";
@@ -452,7 +499,7 @@ function correct(i, anchor) {
   const apply = async text => {
     pop.remove();
     text = text.trim(); if (!text) return;
-    w.text = text; w.fixed = true; w.converted = true; page.text = pageText(page.words); page.events = extractEvents();
+    w.text = text; w.fixed = true; w.converted = true; w.drawing = false; page.text = pageText(page.words); page.events = extractEvents();
     await putPage(page); await learn(text); renderWords();
   };
   $(".cands", pop).onclick = e => e.target.tagName === "BUTTON" && apply(e.target.textContent);
@@ -460,6 +507,12 @@ function correct(i, anchor) {
   $("form .ghost", pop).onclick = () => pop.remove();
   const back = $(".back", pop);
   if (back) back.onclick = async () => { pop.remove(); w.converted = false; await putPage(page); renderWords(); };
+  // A doodle that was read as a word: keep the ink, drop it from the text and the schedule.
+  $(".drawbtn", pop).onclick = async () => {
+    pop.remove(); w.drawing = !w.drawing; w.converted = false;
+    page.text = pageText(page.words); page.events = extractEvents();
+    await putPage(page); renderWords();
+  };
 }
 document.addEventListener("pointerdown", e => { const p = $("#pop"); if (p && !p.contains(e.target) && !e.target.closest(".word")) p.remove(); });
 
@@ -556,9 +609,12 @@ $("#settingsBtn").onclick = () => {
     <label><input type="checkbox" id="sRecog" ${recognitionOn() ? "checked" : ""}> ${STR.recognition}</label>
     <label><input type="checkbox" id="sPen" ${inkSettings.penOnly ? "checked" : ""}> ${STR.penOnly}</label>
     <p>${STR.calib}: <b>${inkSettings.pressureMax.toFixed(2)}</b> <button type="button" id="sCal">${STR.reset}</button></p>
+    <p>${matchMedia("(display-mode: standalone)").matches ? `✓ ${STR.installed}`
+         : installPrompt ? `<button type="button" id="sInstall" class="primary">📲 ${STR.install}</button>` : `<span class="hint">📲 ${STR.installHint}</span>`}</p>
     <p><button type="button" id="sExport">${STR.backup}</button> <label class="file">${STR.restore}<input type="file" id="sImport" accept="application/json" hidden></label></p>
     <p class="hint">Ink Planner · MIT · <a href="https://github.com/" target="_blank" rel="noopener">GitHub</a></p>
     <button class="primary">OK</button></form>`;
+  $("#sInstall") && ($("#sInstall").onclick = async () => { await installPrompt.prompt(); installPrompt = null; dlg.close(); });
   $("#sTheme").onchange = e => { localStorage.setItem("theme", e.target.value); applyTheme(); };
   $("#sPaper").onchange = e => { localStorage.setItem("paper", e.target.value); if (location.hash.startsWith("#/notes")) route(); };
   $(".colpick").onchange = () => {
@@ -579,6 +635,11 @@ $("#settingsBtn").onclick = () => {
   };
   dlg.showModal();
 };
+
+// ---------- install ----------
+// Chrome offers installation through this event; Settings shows an Install button while it is available.
+let installPrompt = null;
+addEventListener("beforeinstallprompt", e => { e.preventDefault(); installPrompt = e; });
 
 // ---------- appearance ----------
 const theme = () => localStorage.getItem("theme") || "auto";

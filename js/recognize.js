@@ -57,10 +57,17 @@ export function segment(strokes, lineOf) {
 }
 
 // Recognise a page. Words whose strokes did not change keep their earlier result (and any correction).
+// Corrected, converted and "drawing" words are frozen: new strokes next to them (a full stop, another word) form
+// words of their own instead of being merged into them. A frozen word is released only if one of its strokes is erased.
+const frozen = w => w.fixed || w.converted || w.drawing;
+const ids = w => w.key.split(".").map(Number);
 export async function recognise(strokes, lineOf, previous = []) {
+  const present = new Set(strokes.map(s => s.id));
+  const kept = previous.filter(w => frozen(w) && ids(w).every(id => present.has(id)));
+  const keptIds = new Set(kept.flatMap(ids));
   const old = new Map(previous.map(w => [w.key, w]));
-  const words = segment(strokes, lineOf);
-  return Promise.all(words.map(async w => {
+  const words = segment(strokes.filter(s => !keptIds.has(s.id)), lineOf);
+  return [...kept, ...await Promise.all(words.map(async w => {
     const base = { key: w.key, line: w.line, x: Math.round(w.a), y: Math.round(w.top), w: Math.round(w.b - w.a), h: Math.round(w.bot - w.top) };
     const prev = old.get(w.key);
     if (prev && !prev.error) return { ...prev, ...base };
@@ -70,12 +77,12 @@ export async function recognise(strokes, lineOf, previous = []) {
     } catch {
       return { ...base, cands: [], text: "", error: true };
     }
-  }));
+  }))].sort((p, q) => p.line - q.line || p.x - q.x);
 }
 
-// Plain text of a page, one line per ruled line.
+// Plain text of a page, one line per ruled line. Drawings are not text.
 export function pageText(words = []) {
   const lines = new Map();
-  for (const w of words) if (w.text) (lines.get(w.line) || lines.set(w.line, []).get(w.line)).push(w.text);
+  for (const w of words) if (w.text && !w.drawing) (lines.get(w.line) || lines.set(w.line, []).get(w.line)).push(w.text);
   return [...lines.keys()].sort((a, b) => a - b).map(k => lines.get(k).join(" ")).join("\n");
 }

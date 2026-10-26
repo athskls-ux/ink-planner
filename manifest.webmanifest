@@ -1,12 +1,22 @@
 {
+  "id": "./",
   "name": "Ink Planner",
   "short_name": "Ink Planner",
   "description": "A handwritten planner for pen tablets, with Greek and English handwriting recognition.",
-  "start_url": "./",
+  "start_url": "./#/day",
   "scope": "./",
   "display": "standalone",
   "orientation": "any",
   "background_color": "#f6f4ef",
   "theme_color": "#f6f4ef",
-  "icons": [{ "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }]
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icons/maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" },
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ],
+  "shortcuts": [
+    { "name": "Today", "url": "./#/day", "icons": [{ "src": "icons/icon-192.png", "sizes": "192x192" }] },
+    { "name": "Month", "url": "./#/month", "icons": [{ "src": "icons/icon-192.png", "sizes": "192x192" }] }
+  ]
 }

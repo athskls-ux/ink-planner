@@ -90,8 +90,18 @@ dialog h3 { margin: 14px 0 4px; font-size: 13px; text-transform: uppercase; lett
 .pop.menu .row > span { font-size: 13px; color: var(--muted); margin-right: 4px; }
 .pop.menu button.on { border-color: var(--accent); color: var(--accent); }
 .pop.menu input { padding: 5px 8px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); }
-.event .time { flex: none; width: 5.6em; padding: 2px 4px; border: 1px solid transparent; border-radius: 8px; background: transparent; color: var(--accent); font-weight: 650; font-variant-numeric: tabular-nums; }
+.event .time { flex: none; min-width: 4.2em; padding: 4px 6px; border: 1px solid transparent; border-radius: 8px; background: transparent; color: var(--accent); font-weight: 650; font-variant-numeric: tabular-nums; font-size: 14px; }
 .event .time:hover, .event .time:focus { border-color: var(--line); }
+.additem .time { flex: none; min-width: 5em; color: var(--accent); font-weight: 650; }
+.tp { width: min(360px, calc(100vw - 16px)); }
+.tp-head { display: flex; justify-content: space-between; align-items: center; font-size: 13px; color: var(--muted); }
+.tp-val { font-size: 22px; color: var(--accent); font-variant-numeric: tabular-nums; }
+.tp-grid { display: grid; gap: 4px; }
+.tp-grid.hours { grid-template-columns: repeat(6, 1fr); }
+.tp-grid.mins { grid-template-columns: repeat(6, 1fr); }
+.tp-grid button { padding: 8px 0; font-variant-numeric: tabular-nums; }
+.tp button.on { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+.tp .row { justify-content: flex-end; }
 .event span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .event.done span { text-decoration: line-through; color: var(--muted); }
 .event a { text-decoration: none; font-size: 18px; }
@@ -99,6 +109,8 @@ dialog h3 { margin: 14px 0 4px; font-size: 13px; text-transform: uppercase; lett
 .word { padding: 2px 8px; border-radius: 8px; font-size: 16px; }
 .word.fixed { border-color: color-mix(in srgb, var(--fixed) 50%, transparent); }
 .word.err { color: var(--err); }
+.word.drawing { opacity: .6; border-style: dashed; }
+.pop .row { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
 
 .tools { position: fixed; z-index: 5; left: 50%; bottom: max(14px, env(safe-area-inset-bottom)); transform: translateX(-50%); display: flex; max-width: calc(100vw - 16px); overflow-x: auto; scrollbar-width: none; gap: 4px; padding: 6px; background: var(--paper); border: 1px solid var(--line); border-radius: 999px; box-shadow: var(--shadow); }
 .tools[hidden] { display: none; }

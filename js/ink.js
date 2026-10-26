@@ -15,7 +15,7 @@ export class InkSurface {
   // margin/onMarginTap: a tap left of `margin` (page units) is handed to the app instead of drawing (to change an hour).
   constructor(host, { height, background, strokes = [], onChange, margin = 0, onMarginTap }) {
     this.host = host; this.height = height; this.onChange = onChange; this.margin = margin; this.onMarginTap = onMarginTap;
-    // Pen style for new strokes: colour ("" = theme ink) and width factor. Tools: pen, draw (not recognised), marker, eraser.
+    // Pen style for new strokes: colour ("" = theme ink) and width factor. Tools: pen, marker, eraser.
     this.color = ""; this.widthFactor = 1;
     this.strokes = strokes; this.nextId = Math.max(0, ...strokes.map(s => s.id)) + 1;
     this.undoStack = []; this.redoStack = [];
@@ -117,7 +117,7 @@ export class InkSurface {
     // stopPropagation: the app closes open popovers on any pointerdown, which would close the one this tap opens.
     if (!erase && this.onMarginTap && this.pt(e)[0] < this.margin) { e.stopPropagation(); this.onMarginTap(this.pt(e), e); return; }
     const style = { ...(this.color && { color: this.color }), ...(this.widthFactor !== 1 && { w: this.widthFactor }),
-                    ...(this.tool === "draw" && { draw: true }), ...(this.tool === "marker" && { hl: true }) };
+                    ...(this.tool === "marker" && { hl: true }) };
     this.cur = erase ? { erase: true, removed: [] } : { id: this.nextId++, pts: [this.pt(e)], ...style };
     if (erase) this.eraseAt(this.pt(e));
   }

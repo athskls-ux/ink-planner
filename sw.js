@@ -1,6 +1,6 @@
 // Offline support: the app shell and word lists are cached; recognition requests always go to the network.
-const CACHE = "ink-planner-v2";
-const SHELL = ["./", "index.html", "css/app.css", "icon.svg", "manifest.webmanifest",
+const CACHE = "ink-planner-v3";
+const SHELL = ["./", "index.html", "css/app.css", "icon.svg", "manifest.webmanifest", "icons/icon-192.png", "icons/icon-512.png",
   "js/app.js", "js/store.js", "js/ink.js", "js/templates.js", "js/recognize.js", "js/lexicon.js", "js/dates.js", "js/remind.js", "js/recurring.js", "js/collections.js",
   "data/el-words.txt", "data/en-words.txt"];
 
