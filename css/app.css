@@ -4,10 +4,13 @@
   --r: 12px; --font: system-ui, "Segoe UI", Roboto, "Noto Sans", sans-serif;
   color-scheme: light;
 }
+/* Dark: follows the system unless Settings → Appearance picks Light or Dark (data-theme on <html>). */
 @media (prefers-color-scheme: dark) {
-  :root { --bg: #16171b; --paper: #1e2026; --ink: #e9e7e1; --muted: #9a9ca4; --line: #2d3038; --rule: #34405a; --band: #262932;
+  :root:not([data-theme="light"]) { --bg: #16171b; --paper: #1e2026; --ink: #e9e7e1; --muted: #9a9ca4; --line: #2d3038; --rule: #34405a; --band: #262932;
     --accent: #8aa6ff; --accent-ink: #10131a; --fixed: #5fd08f; --err: #fb923c; --shadow: 0 1px 2px rgba(0,0,0,.4); color-scheme: dark; }
 }
+:root[data-theme="dark"] { --bg: #16171b; --paper: #1e2026; --ink: #e9e7e1; --muted: #9a9ca4; --line: #2d3038; --rule: #34405a; --band: #262932;
+  --accent: #8aa6ff; --accent-ink: #10131a; --fixed: #5fd08f; --err: #fb923c; --shadow: 0 1px 2px rgba(0,0,0,.4); color-scheme: dark; }
 * { box-sizing: border-box; }
 html, body { margin: 0; height: 100%; }
 body { display: grid; grid-template-rows: auto minmax(0, 1fr); background: var(--bg); color: var(--ink); font: 15px/1.45 var(--font); -webkit-tap-highlight-color: transparent; }
@@ -53,7 +56,22 @@ main { min-height: 0; }
 #rstatus { text-transform: none; letter-spacing: 0; font-weight: 400; margin-left: 6px; color: var(--accent); }
 #agenda { margin-bottom: 18px; }
 .event { display: flex; align-items: center; gap: 8px; padding: 7px 10px; margin-bottom: 6px; background: var(--paper); border-radius: 10px; box-shadow: var(--shadow); }
-.event input[type=checkbox] { width: 20px; height: 20px; accent-color: var(--accent); flex: none; }
+.event .sym { flex: none; width: 34px; height: 34px; padding: 0; border-radius: 50%; font-size: 20px; line-height: 1; color: var(--accent); }
+.event .star { color: #d99a00; }
+.event small { margin-left: 6px; color: var(--muted); font-size: 12px; }
+.event .bell { flex: none; font-size: 15px; }
+.event.s-done .etext, .event.s-migrated .etext { color: var(--muted); }
+.event.s-cancelled .etext { text-decoration: line-through; color: var(--muted); }
+.additem { display: flex; gap: 6px; margin-top: 10px; }
+.additem input { min-width: 0; padding: 6px 8px; border: 1px solid var(--line); border-radius: 10px; background: var(--paper); }
+.additem input[type=text] { flex: 1; }
+.additem button { flex: none; width: 38px; padding: 0; font-size: 20px; }
+.legend { margin: 4px 2px 0; font-size: 12px; color: var(--muted); }
+.pop.menu { display: flex; flex-direction: column; gap: 8px; }
+.pop.menu .row { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.pop.menu .row > span { font-size: 13px; color: var(--muted); margin-right: 4px; }
+.pop.menu button.on { border-color: var(--accent); color: var(--accent); }
+.pop.menu input { padding: 5px 8px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); }
 .event .time { flex: none; width: 5.6em; padding: 2px 4px; border: 1px solid transparent; border-radius: 8px; background: transparent; color: var(--accent); font-weight: 650; font-variant-numeric: tabular-nums; }
 .event .time:hover, .event .time:focus { border-color: var(--line); }
 .event span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -95,6 +113,7 @@ main { min-height: 0; }
 dialog { border: 1px solid var(--line); border-radius: var(--r); background: var(--paper); color: var(--ink); max-width: min(440px, calc(100vw - 32px)); }
 dialog h2 { margin-top: 0; }
 dialog label { display: block; margin: 8px 0; }
+dialog select { padding: 4px 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); }
 dialog .file { display: inline-block; padding: 6px 12px; border: 1px solid var(--line); border-radius: 10px; cursor: pointer; }
 
 @media (max-width: 900px) {

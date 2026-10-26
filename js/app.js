@@ -5,6 +5,7 @@ import { dayTemplate, weekTemplate, notesTemplate, lineFinder } from "./template
 import { recognise, pageText } from "./recognize.js";
 import { loadLexicon, learn, strip } from "./lexicon.js";
 import { iso, parseIso, addDays, addMonths, monday, weekKey, weekStart, isoWeek, sameDay } from "./dates.js";
+import { askNotifications, scheduleReminders } from "./remind.js";
 
 // ---------- language ----------
 const LANG = (navigator.language || "en").startsWith("el") ? "el" : "en";
@@ -15,14 +16,20 @@ const STR = {
         noResults: "Δεν βρέθηκε τίποτα.", settings: "Ρυθμίσεις", recognition: "Αναγνώριση χειρογράφου", backup: "Αντίγραφο ασφαλείας (JSON)", restore: "Επαναφορά από αντίγραφο",
         calib: "Βαθμονόμηση πίεσης", reset: "Επαναφορά", week_n: "Εβδομάδα", tapFix: "Πάτα μια λέξη για να τη διορθώσεις.", restored: "Η επαναφορά ολοκληρώθηκε.",
         convert: "Μετατροπή σε κείμενο", showInk: "Δείξε το χειρόγραφο", agenda: "Πρόγραμμα", addCal: "Πρόσθεσε στο Google Calendar",
-        noAgenda: "Γράψε δίπλα σε μια ώρα, ή γράψε μια ώρα μπροστά (π.χ. 10:30), για ραντεβού ή δουλειά.", done: "Έγινε", time: "Ώρα" },
+        noAgenda: "Γράψε δίπλα σε μια ώρα, ή γράψε μια ώρα μπροστά (π.χ. 10:30), για ραντεβού ή δουλειά.", done: "Έγινε", time: "Ώρα",
+        status: "Κατάσταση", task: "Δουλειά", event: "Ραντεβού", star: "Σημαντικό", cancelItem: "Ακύρωση", reopen: "Ξανά ανοιχτό",
+        remind: "Υπενθύμιση", migrate: "Μετάθεση", move: "Μετάθεση", notifOff: "Οι ειδοποιήσεις είναι κλειστές για αυτή τη σελίδα στον browser.",
+        newItem: "Νέο ραντεβού ή δουλειά…", add: "Προσθήκη", theme: "Εμφάνιση", auto: "Αυτόματο", light: "Φωτεινό", dark: "Σκούρο" },
   en: { today: "Today", month: "Month", week: "Week", day: "Day", notes: "Notes", search: "Search", pen: "Pen", eraser: "Eraser",
         undo: "Undo", redo: "Redo", penOnly: "Pen only", text: "Text", recognising: "Recognising…", offline: "Offline: recognition will run later",
         empty: "Write with the pen; the text appears here.", fix: "Correct", save: "Save", cancel: "Cancel", searchHint: "Search your handwriting…",
         noResults: "Nothing found.", settings: "Settings", recognition: "Handwriting recognition", backup: "Backup (JSON)", restore: "Restore from backup",
         calib: "Pressure calibration", reset: "Reset", week_n: "Week", tapFix: "Tap a word to correct it.", restored: "Restore complete.",
         convert: "Convert to text", showInk: "Show handwriting", agenda: "Schedule", addCal: "Add to Google Calendar",
-        noAgenda: "Write next to an hour, or start a line with a time (e.g. 10:30), to add an appointment or task.", done: "Done", time: "Time" },
+        noAgenda: "Write next to an hour, or start a line with a time (e.g. 10:30), to add an appointment or task.", done: "Done", time: "Time",
+        status: "Status", task: "Task", event: "Appointment", star: "Important", cancelItem: "Cancel", reopen: "Reopen",
+        remind: "Reminder", migrate: "Postpone", move: "Move", notifOff: "Notifications are blocked for this page in the browser.",
+        newItem: "New appointment or task…", add: "Add", theme: "Appearance", auto: "Automatic", light: "Light", dark: "Dark" },
 }[LANG];
 
 const $ = (s, el = document) => el.querySelector(s);
@@ -67,7 +74,8 @@ async function showMonth(d) {
     const day = addDays(start, i);
     // Appointments first (with their time), then the day's other notes.
     const p = pages.get("day:" + iso(day));
-    const snippet = (p?.events?.length ? p.events.filter(e => !e.done).map(e => `${eventTime(e)} ${e.text}`) : (p?.text || "").split("\n").filter(Boolean)).slice(0, 3);
+    const open = e => !e.done && !["done", "cancelled", "migrated"].includes(e.status);
+    const snippet = (p?.events?.length ? p.events.filter(open).map(e => `${eventTime(e)} ${e.text}`) : (p?.text || "").split("\n").filter(Boolean)).slice(0, 3);
     const ink = p?.strokes?.length && !snippet.length;
     cells += `<a class="cell${day.getMonth() !== first.getMonth() ? " out" : ""}${sameDay(day, today) ? " today" : ""}" href="#/day/${iso(day)}">
       <span class="num">${day.getDate()}</span>${snippet.map(s => `<span class="snip">${esc(s)}</span>`).join("")}${ink ? `<span class="dot"></span>` : ""}</a>`;
@@ -142,7 +150,8 @@ const isConverted = w => w.converted ?? !!w.fixed;
 function showConverted() {
   if (!surface || !tplNow) return;
   const words = [...(page.words || [])].sort((a, b) => a.line - b.line || a.x - b.x);
-  const hidden = [], labels = [];
+  const hidden = [], labels = [], baseline = line => tplNow.baselines[line] - 10;
+  const byLine = new Map((page.events || []).filter(e => e.line != null && !e.part).map(e => [e.line, e]));
   words.forEach((w, i) => {
     if (!isConverted(w) || !w.text) return;
     hidden.push(...w.key.split(".").map(Number));
@@ -152,34 +161,86 @@ function showConverted() {
     const first = !prev || !sameLine(prev);
     const join = !first && isConverted(prev) && !!prev.text;
     const nextInk = words.slice(i + 1).find(o => sameLine(o) && !isConverted(o));
-    labels.push({ text: w.text, x: first ? tplNow.textX : w.x, join, baseline: (tplNow.baselines[w.line] ?? w.y + w.h) - 10, limit: (nextInk ? nextInk.x : 1000) - 8 });
+    labels.push({ text: w.text, x: first ? tplNow.textX : w.x, join, baseline: baseline(w.line), limit: (nextInk ? nextInk.x : 1000) - 8,
+                  strike: byLine.get(w.line)?.status === "cancelled" });
   });
+  // Bullet-journal symbols in the margin, and items moved here from other days on free hour lines.
+  const used = new Set(words.map(w => w.line));
+  for (const e of page.events || []) {
+    if (e.part) continue;  // one symbol per written line
+    const line = e.line ??(tplNow.slots ? tplNow.slots.indexOf(+eventTime(e).slice(0, 2)) : -1);
+    if (line < 0 || (e.line == null && used.has(line))) continue;
+    used.add(line);
+    labels.push({ text: (e.star ? "★" : "") + symbol(e), x: 56, baseline: baseline(line), limit: 78, size: 22, muted: true });
+    if (e.line == null) labels.push({ text: e.text, x: tplNow.textX, baseline: baseline(line), limit: 992, strike: e.status === "cancelled" });
+  }
   surface.setConverted(hidden, labels);
 }
 
-// ---------- schedule ----------
-// On a day page, a line becomes an appointment or task { line, time, text, done } when it is on an hour line
-// or starts with a written time ("10:30 Οδοντίατρος", also in the notes area). The time comes from, in order:
+// ---------- schedule (bullet journal) ----------
+// On a day page, a line becomes an item { line, time, text, kind, status, star, remind, to } when it is on an hour
+// line or starts with a written time ("10:30 Οδοντίατρος", also in the notes area). The time comes from, in order:
 // a time picked in the schedule list, a time written at the start of the line, the hour of the line.
-const TIME = /^\s*([01]?\d|2[0-3])\s*[:.·]\s*([0-5]\d)(?!\d)\s*/;
+// Kind, status, star and reminder live in page.meta[line], so they survive re-recognition of the line.
+// Items postponed here from another day have no handwriting; they live in page.items with a `from` date.
+// A line can hold several items, each starting with its own time: "7:00 Γυμναστήριο 7:30 Πρωινό".
+// Each part has its own meta/picked-time key: "3" for the first part of line 3, "3.1" for the second, and so on.
+const TIMES = /(?:^|\s)([01]?\d|2[0-3])\s*[:.·]\s*([0-5]\d)(?!\d)/g;
 const hm = (h, m = 0) => `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+const partKey = e => e.part ? `${e.line}.${e.part}` : String(e.line);
+function splitLine(text) {
+  const parts = [], marks = [...text.matchAll(TIMES)];
+  const head = text.slice(0, marks[0]?.index ?? text.length).trim();
+  if (head) parts.push({ time: null, text: head });
+  marks.forEach((m, i) => {
+    const body = text.slice(m.index + m[0].length, marks[i + 1]?.index ?? text.length).trim();
+    if (body) parts.push({ time: hm(+m[1], +m[2]), text: body });
+  });
+  return parts;
+}
 function extractEvents() {
   if (!tplNow?.slots) return undefined;
-  const done = new Set((page.events || []).filter(e => e.done).map(e => e.line + "|" + e.text));
+  const meta = page.meta || {};
+  for (const e of page.events || []) if (e.done && e.line != null && !meta[e.line]) meta[e.line] = { status: "done" };  // older pages
+  page.meta = meta;
   const picked = page.times || {}, lines = new Map();
   for (const w of [...(page.words || [])].sort((a, b) => a.x - b.x)) if (w.text) (lines.get(w.line) || lines.set(w.line, []).get(w.line)).push(w.text);
   const events = [];
   for (const [line, ws] of lines) {
-    let text = ws.join(" "), time = null;
-    const m = text.match(TIME);
-    if (m && text.slice(m[0].length).trim()) { time = hm(+m[1], +m[2]); text = text.slice(m[0].length).trim(); }
-    time = picked[line] || time || (line < tplNow.slots.length ? hm(tplNow.slots[line]) : null);
-    if (time) events.push({ line, time, text, done: done.has(line + "|" + text) });
+    splitLine(ws.join(" ")).forEach((p, part) => {
+      const key = part ? `${line}.${part}` : String(line);
+      const time = picked[key] || p.time || (line < tplNow.slots.length ? hm(tplNow.slots[line]) : null);
+      if (time) events.push({ kind: "task", status: "open", ...meta[key], line, part, time, text: p.text });
+    });
   }
+  for (const it of page.items || []) events.push({ kind: "task", status: "open", ...it });
   return events.sort((a, b) => a.time.localeCompare(b.time));
 }
 // Pages saved before exact times existed have { hour } events.
 const eventTime = e => e.time || hm(e.hour);
+// • task  ○ appointment  × done  > postponed; a cancelled item keeps its symbol and is struck through.
+const symbol = e => e.status === "done" || e.done ? "×" : e.status === "migrated" ? ">" : e.kind === "event" ? "○" : "•";
+const shortDate = d => parseIso(d).toLocaleDateString(LANG, { weekday: "short", day: "numeric", month: "short" });
+
+async function updateItem(e, patch) {
+  if (e.line != null) { const k = partKey(e); page.meta = { ...page.meta, [k]: { ...page.meta?.[k], ...patch } }; }
+  else Object.assign(page.items.find(i => i.id === e.id), patch);
+  if (patch.time && e.line != null) page.times = { ...page.times, [partKey(e)]: patch.time };
+  page.events = extractEvents();
+  await putPage(page);
+  renderAgenda(); showConverted(); scheduleReminders();
+}
+
+// Postpone: the item is copied to the chosen day (as typed text) and marked ">" here.
+async function postpone(e, date, time) {
+  const key = "day:" + date, target = (await getPage(key)) || { key, strokes: [], words: [], text: "" };
+  const item = { id: Date.now().toString(36), time: time || eventTime(e), text: e.text, kind: e.kind || "task", status: "open",
+                 star: !!e.star, remind: e.remind || 0, from: page.key.slice(4) };
+  target.items = [...(target.items || []), item];
+  target.events = [...(target.events || []), item].sort((a, b) => eventTime(a).localeCompare(eventTime(b)));
+  await putPage(target);
+  await updateItem(e, { status: "migrated", to: date });
+}
 
 // Google Calendar's "create event" link: it opens the event pre-filled (one hour long) and you press Save.
 function calendarLink(date, e) {
@@ -192,23 +253,68 @@ function calendarLink(date, e) {
 function renderAgenda() {
   const box = $("#agenda"); if (!box) return;
   const events = page.events || [], date = page.key.slice(4);
-  box.innerHTML = events.length ? events.map((e, i) => `<div class="event${e.done ? " done" : ""}">
-      <input type="checkbox" data-i="${i}" ${e.done ? "checked" : ""} aria-label="${STR.done}">
+  const remindLabel = m => REMIND.find(([v]) => v === m)?.[1] || "";
+  box.innerHTML = events.length ? events.map((e, i) => `<div class="event s-${e.status || "open"}">
+      <button class="sym" data-i="${i}" aria-label="${STR.status}">${symbol(e)}</button>
       <input type="time" class="time" data-i="${i}" value="${eventTime(e)}" aria-label="${STR.time}">
-      <span>${esc(e.text)}</span>
+      <span class="etext">${e.star ? '<b class="star">★</b> ' : ""}${esc(e.text)}
+        ${e.to ? `<small>&gt; ${esc(shortDate(e.to))}</small>` : ""}${e.from ? `<small>&lt; ${esc(shortDate(e.from))}</small>` : ""}</span>
+      ${e.remind ? `<span class="bell" title="${STR.remind}: ${remindLabel(e.remind)}">🔔</span>` : ""}
       <a href="${calendarLink(date, e)}" target="_blank" rel="noopener" title="${STR.addCal}" aria-label="${STR.addCal}">📅</a></div>`).join("")
+    + `<p class="legend">• ${STR.task} · ○ ${STR.event} · × ${STR.done} · &gt; ${STR.migrate} · ★ ${STR.star}</p>`
     : `<p class="hint">${STR.noAgenda}</p>`;
-  box.onchange = async e => {
-    const ev = events[+e.target.dataset.i]; if (!ev) return;
-    if (e.target.type === "checkbox") ev.done = e.target.checked;
-    if (e.target.type === "time" && e.target.value) { page.times = { ...page.times, [ev.line]: e.target.value }; page.events = extractEvents(); }
-    await putPage(page); renderAgenda();
+  // Typed entry, for any time (two things between 7 and 8) or when there is no pen at hand.
+  const next = hm(Math.min(22, new Date().getHours() + 1));
+  box.insertAdjacentHTML("beforeend", `<form class="additem"><input type="time" value="${next}" required aria-label="${STR.time}">
+    <input type="text" placeholder="${STR.newItem}" required><button class="primary" aria-label="${STR.add}">+</button></form>`);
+  $(".additem", box).onsubmit = async ev => {
+    ev.preventDefault();
+    const [t, x] = ev.target.querySelectorAll("input");
+    page.items = [...(page.items || []), { id: Date.now().toString(36), time: t.value, text: x.value.trim(), kind: "task", status: "open" }];
+    page.events = extractEvents(); await putPage(page);
+    renderAgenda(); showConverted(); scheduleReminders();
+  };
+  box.onchange = e => { const ev = events[+e.target.dataset.i]; if (ev && e.target.value) updateItem(ev, { time: e.target.value }); };
+  box.onclick = e => { const b = e.target.closest(".sym"); if (b) itemMenu(events[+b.dataset.i], b); };
+}
+
+const REMIND = [[0, "—"], [10, "10′"], [30, "30′"], [60, "1h"], [1440, "1d"]];
+// Item menu: kind, status, star, reminder and postpone.
+function itemMenu(e, anchor) {
+  $("#pop")?.remove();
+  const pop = document.createElement("div"); pop.id = "pop"; pop.className = "pop menu";
+  const btn = (act, label, on) => `<button data-act="${act}"${on ? ' class="on"' : ""}>${label}</button>`;
+  const tomorrow = iso(addDays(parseIso(page.key.slice(4)), 1));
+  pop.innerHTML = `<div class="row">${btn("task", "• " + STR.task, e.kind !== "event")}${btn("event", "○ " + STR.event, e.kind === "event")}${btn("star", "★ " + STR.star, e.star)}</div>
+    <div class="row">${btn("done", "× " + STR.done, e.status === "done")}${btn("cancelled", "⊘ " + STR.cancelItem, e.status === "cancelled")}${btn("open", "↺ " + STR.reopen)}</div>
+    <div class="row"><span>🔔 ${STR.remind}</span>${REMIND.map(([m, l]) => btn("r" + m, l, (e.remind || 0) === m)).join("")}</div>
+    <form class="row"><span>&gt; ${STR.migrate}</span><input type="date" value="${tomorrow}" required><input type="time" value="${eventTime(e)}"><button class="primary">${STR.move}</button></form>`;
+  document.body.append(pop);
+  const r = anchor.getBoundingClientRect();
+  pop.style.left = Math.max(8, Math.min(r.left, innerWidth - pop.offsetWidth - 8)) + "px";
+  pop.style.top = (r.bottom + 6 + pop.offsetHeight > innerHeight ? Math.max(8, r.top - pop.offsetHeight - 6) : r.bottom + 6) + "px";
+  pop.onclick = async ev => {
+    const act = ev.target.closest("button[data-act]")?.dataset.act; if (!act) return;
+    pop.remove();
+    if (act === "task" || act === "event") return updateItem(e, { kind: act });
+    if (act === "star") return updateItem(e, { star: !e.star });
+    if (act === "done" || act === "cancelled" || act === "open") return updateItem(e, { status: act, ...(act === "open" ? { to: null } : {}) });
+    if (act[0] === "r") {
+      const m = +act.slice(1);
+      if (m && !(await askNotifications())) alert(STR.notifOff);
+      return updateItem(e, { remind: m });
+    }
+  };
+  $("form", pop).onsubmit = ev => {
+    ev.preventDefault();
+    const [d, t] = pop.querySelectorAll("form input");
+    pop.remove(); postpone(e, d.value, t.value);
   };
 }
 
 function renderWords() {
+  if (tplNow?.slots && (page.words?.length || page.items?.length) && (!page.events || page.events.some(e => !e.time))) page.events = extractEvents();
   showConverted();
-  if (tplNow?.slots && page.words?.length && (!page.events || page.events.some(e => !e.time))) page.events = extractEvents();
   renderAgenda();
   const box = $("#words"); if (!box) return;
   const words = page.words || [];
@@ -299,12 +405,14 @@ const pageLabel = k => k.startsWith("day:") ? parseIso(k.slice(4)).toLocaleDateS
 $("#settingsBtn").onclick = () => {
   const dlg = $("#settings");
   dlg.innerHTML = `<form method="dialog"><h2>${STR.settings}</h2>
+    <label>${STR.theme}: <select id="sTheme">${["auto", "light", "dark"].map(t => `<option value="${t}"${theme() === t ? " selected" : ""}>${STR[t]}</option>`).join("")}</select></label>
     <label><input type="checkbox" id="sRecog" ${recognitionOn() ? "checked" : ""}> ${STR.recognition}</label>
     <label><input type="checkbox" id="sPen" ${inkSettings.penOnly ? "checked" : ""}> ${STR.penOnly}</label>
     <p>${STR.calib}: <b>${inkSettings.pressureMax.toFixed(2)}</b> <button type="button" id="sCal">${STR.reset}</button></p>
     <p><button type="button" id="sExport">${STR.backup}</button> <label class="file">${STR.restore}<input type="file" id="sImport" accept="application/json" hidden></label></p>
     <p class="hint">Ink Planner · MIT · <a href="https://github.com/" target="_blank" rel="noopener">GitHub</a></p>
     <button class="primary">OK</button></form>`;
+  $("#sTheme").onchange = e => { localStorage.setItem("theme", e.target.value); applyTheme(); };
   $("#sRecog").onchange = e => localStorage.setItem("recognition", e.target.checked ? "1" : "0");
   $("#sPen").onchange = e => { inkSettings.penOnly = e.target.checked; syncTools(); };
   $("#sCal").onclick = () => { localStorage.removeItem("pressureMax"); dlg.close(); };
@@ -320,6 +428,18 @@ $("#settingsBtn").onclick = () => {
   dlg.showModal();
 };
 
+// ---------- appearance ----------
+const theme = () => localStorage.getItem("theme") || "auto";
+function applyTheme() {
+  const t = theme(), root = document.documentElement;
+  if (t === "auto") delete root.dataset.theme; else root.dataset.theme = t;
+  const dark = t === "dark" || (t === "auto" && matchMedia("(prefers-color-scheme: dark)").matches);
+  for (const m of document.querySelectorAll('meta[name="theme-color"]')) m.content = dark ? "#16171b" : "#f6f4ef";
+  surface?.redraw();  // ink and typed text take the theme's colour
+}
+matchMedia("(prefers-color-scheme: dark)").addEventListener("change", applyTheme);
+applyTheme();
+
 // ---------- start ----------
 $("#todayBtn").textContent = STR.today;
 $("#todayBtn").onclick = () => {
@@ -331,4 +451,5 @@ for (const b of document.querySelectorAll("#tools [data-label]")) { b.title = ST
 addEventListener("online", () => surface && page?.strokes.length && route());
 if ("serviceWorker" in navigator && location.protocol !== "file:") navigator.serviceWorker.register("sw.js").catch(() => {});
 loadLexicon();
+scheduleReminders();
 route();

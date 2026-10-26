@@ -65,20 +65,22 @@ export class InkSurface {
     this.drawLabels();
   }
 
-  // labels: [{ text, x, baseline, limit, join }] in page units, in reading order.
+  // labels: [{ text, x, baseline, limit, join, size, muted, strike }] in page units, in reading order.
   // `join` places a word right after the previous label with a normal space; `limit` is the right edge it must not pass.
   setConverted(hiddenIds, labels) { this.hidden = new Set(hiddenIds); this.labels = labels; this.redraw(); }
   drawLabels() {
-    const c = this.ctx, font = getComputedStyle(this.host).fontFamily;
-    c.fillStyle = this.inkColor; c.textBaseline = "alphabetic";
+    const c = this.ctx, style = getComputedStyle(this.host), font = style.fontFamily, muted = style.getPropertyValue("--accent").trim();
+    c.textBaseline = "alphabetic";
     let end = 0;
     for (const l of this.labels) {
-      let size = 30;
-      c.font = `${size}px ${font}`;
+      let size = l.size || 30;
+      c.font = `${size}px ${font}`; c.fillStyle = l.muted ? muted : this.inkColor;
       const x = l.join ? end + c.measureText(" ").width : l.x, w = c.measureText(l.text).width;
-      if (w > l.limit - x) { size = Math.max(16, size * (l.limit - x) / w); c.font = `${size}px ${font}`; }
+      if (w > l.limit - x) { size = Math.max(14, size * (l.limit - x) / w); c.font = `${size}px ${font}`; }
       c.fillText(l.text, x, l.baseline);
-      end = x + c.measureText(l.text).width;
+      const width = c.measureText(l.text).width;
+      if (l.strike) c.fillRect(x - (l.join ? c.measureText(" ").width : 0), l.baseline - size * 0.32, width + (l.join ? c.measureText(" ").width : 0), Math.max(1.5, size / 14));
+      end = x + width;
     }
   }
 

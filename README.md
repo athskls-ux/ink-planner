@@ -15,7 +15,13 @@ recognition. It runs in the browser as an installable web app (PWA), with no acc
   the **Aa** button converts a whole page.
 - **Appointments and tasks:** anything written on an hour line of a day page, or any line that starts with a time
   such as `10:30`, appears in the day's schedule with its time. You can tick it off, change the time from a time
-  picker, and add it to Google Calendar with one tap. Month view lists each day's appointments.
+  picker, and add it to Google Calendar with one tap. Month view lists each day's appointments. A line can hold several
+  items (`7:00 Gym 7:30 Breakfast`), and the **+** field adds a typed item at any time.
+- **Bullet-journal symbols:** • task, ○ appointment, × done, > postponed, ★ important, struck through when cancelled.
+  Postponing moves the item to another day and time and notes where it came from.
+- **Reminders** 10 minutes to 1 day before. They fire while the browser is running (also in the background); reliable
+  reminders when the browser is closed will come with Google Calendar sync.
+- **Light, dark or automatic** appearance.
 - **Search** across everything you have written.
 - **Works offline:** pages are stored on the device (IndexedDB) and recognised when you are back online. Backup and
   restore use a JSON file.
